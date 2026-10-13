@@ -1,0 +1,247 @@
+package app.novatv.net
+
+import app.novatv.EntryKind
+import app.novatv.MediaEntry
+import app.novatv.Server
+import app.novatv.ServerType
+import app.novatv.StreamInfo
+import app.novatv.StreamsInfo
+import app.novatv.TrackKind
+import okhttp3.FormBody
+import org.json.JSONArray
+import org.json.JSONObject
+
+object PlexApi {
+
+    private fun headers(token: String, clientId: String): Map<String, String> = mapOf(
+        "X-Plex-Token" to token,
+        "Accept" to "application/json",
+        "X-Plex-Client-Identifier" to clientId,
+        "X-Plex-Product" to "NovaTV",
+        "X-Plex-Version" to "1.0"
+    )
+
+    /** Manual setup: server URL + token. Returns a Server with its friendly name. */
+    fun verify(rawUrl: String, token: String, clientId: String): Server {
+        val base = Http.normalizeUrl(rawUrl)
+        val root = JSONObject(Http.get("$base/", headers(token, clientId)))
+        val name = root.optJSONObject("MediaContainer")?.optString("friendlyName", "Plex") ?: "Plex"
+        val id = "plex-manual-${Math.abs(base.hashCode())}"
+        return Server(id = id, type = ServerType.PLEX, name = name.ifEmpty { "Plex" }, baseUrl = base, token = token)
+    }
+
+    private fun paged(s: Server, path: String, h: Map<String, String>): List<JSONObject> {
+        val out = ArrayList<JSONObject>()
+        var start = 0
+        val size = 500
+        val sep = if (path.contains('?')) "&" else "?"
+        while (true) {
+            val url = "${s.baseUrl}$path${sep}X-Plex-Container-Start=$start&X-Plex-Container-Size=$size"
+            val mc = JSONObject(Http.get(url, h)).getJSONObject("MediaContainer")
+            val page = mc.optJSONArray("Metadata").objs()
+            out.addAll(page)
+            start += page.size
+            val total = mc.optInt("totalSize", mc.optInt("size", start))
+            if (page.isEmpty() || start >= total) break
+        }
+        return out
+    }
+
+    /** Audio + subtitle streams of one item (used for track menus, sidecar subs and transcode picks). */
+    fun info(s: Server, itemId: String, clientId: String): StreamsInfo {
+        val tokenQ = "X-Plex-Token=${Http.enc(s.token)}"
+        val root = JSONObject(Http.get("${s.baseUrl}/library/metadata/$itemId", headers(s.token, clientId)))
+        val md = root.getJSONObject("MediaContainer").optJSONArray("Metadata").objs().firstOrNull()
+        val part = md?.optJSONArray("Media").objs().firstOrNull()
+            ?.optJSONArray("Part").objs().firstOrNull()
+        val textCodecs = setOf("srt", "subrip", "ass", "ssa", "webvtt", "vtt", "mov_text", "text")
+        val audio = ArrayList<StreamInfo>()
+        val subs = ArrayList<StreamInfo>()
+        for (st in part?.optJSONArray("Stream").objs()) {
+            val id = st.optInt("id", -1)
+            if (id < 0) continue
+            val lang = st.optString("languageCode", "").ifEmpty { st.optString("language", "") }
+            val title = st.optString("displayTitle", "").ifEmpty { st.optString("title", "") }
+            val codec = st.optString("codec", "")
+            when (st.optInt("streamType", 0)) {
+                2 -> audio.add(
+                    StreamInfo(id.toString(), TrackKind.AUDIO, lang, title, codec, false, false, "", "")
+                )
+                3 -> {
+                    val key = st.optString("key", "")
+                    val mime = when (codec.lowercase()) {
+                        "ass", "ssa" -> "text/x-ssa"
+                        "webvtt", "vtt" -> "text/vtt"
+                        else -> "application/x-subrip"
+                    }
+                    subs.add(
+                        StreamInfo(
+                            key = id.toString(),
+                            kind = TrackKind.SUBTITLE,
+                            lang = lang,
+                            title = title,
+                            codec = codec,
+                            external = key.isNotEmpty(),
+                            isText = codec.lowercase() in textCodecs,
+                            sidecarUrl = if (key.isNotEmpty()) "${s.baseUrl}$key?$tokenQ" else "",
+                            mime = mime
+                        )
+                    )
+                }
+            }
+        }
+        return StreamsInfo(itemId, audio, subs)
+    }
+
+    private fun tags(arr: JSONArray?): List<String> =
+        arr.objs().map { it.optString("tag", "") }.filter { it.isNotEmpty() }
+
+    private fun partKey(m: JSONObject): String =
+        m.optJSONArray("Media").objs().firstOrNull()
+            ?.optJSONArray("Part").objs().firstOrNull()
+            ?.optString("key", "") ?: ""
+
+    fun fetch(s: Server, clientId: String): List<MediaEntry> {
+        val h = headers(s.token, clientId)
+        val tokenQ = "X-Plex-Token=${Http.enc(s.token)}"
+        val sections = JSONObject(Http.get("${s.baseUrl}/library/sections", h))
+            .getJSONObject("MediaContainer").optJSONArray("Directory").objs()
+
+        val out = ArrayList<MediaEntry>()
+
+        for (sec in sections) {
+            val key = sec.optString("key")
+            if (key.isEmpty()) continue
+            when (sec.optString("type")) {
+                "movie" -> {
+                    for (m in paged(s, "/library/sections/$key/all?type=1", h)) {
+                        val part = partKey(m)
+                        if (part.isEmpty()) continue
+                        val thumb = m.optString("thumb", "")
+                        out.add(
+                            MediaEntry(
+                                id = "${s.id}:${m.optString("ratingKey")}",
+                                serverId = s.id,
+                                itemId = m.optString("ratingKey"),
+                                kind = EntryKind.MOVIE,
+                                title = m.optString("title", "Untitled"),
+                                subtitle = "",
+                                series = "",
+                                network = "",
+                                genres = tags(m.optJSONArray("Genre")),
+                                year = m.optInt("year", 0),
+                                durationMs = m.optLong("duration", 0L),
+                                thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
+                                streamUrl = "${s.baseUrl}$part?$tokenQ"
+                            )
+                        )
+                    }
+                }
+                "show" -> {
+                    val showInfo = HashMap<String, Pair<List<String>, String>>()
+                    for (sh in paged(s, "/library/sections/$key/all?type=2", h)) {
+                        showInfo[sh.optString("ratingKey")] =
+                            Pair(tags(sh.optJSONArray("Genre")), sh.optString("studio", ""))
+                    }
+                    for (e in paged(s, "/library/sections/$key/all?type=4", h)) {
+                        val part = partKey(e)
+                        if (part.isEmpty()) continue
+                        val info = showInfo[e.optString("grandparentRatingKey")]
+                        val season = e.optInt("parentIndex", 0)
+                        val ep = e.optInt("index", 0)
+                        val code = if (season > 0 || ep > 0) String.format("S%02dE%02d", season, ep) else ""
+                        val thumb = e.optString("thumb", "").ifEmpty { e.optString("grandparentThumb", "") }
+                        out.add(
+                            MediaEntry(
+                                id = "${s.id}:${e.optString("ratingKey")}",
+                                serverId = s.id,
+                                itemId = e.optString("ratingKey"),
+                                kind = EntryKind.EPISODE,
+                                title = e.optString("title", "Episode"),
+                                subtitle = code,
+                                series = e.optString("grandparentTitle", ""),
+                                network = info?.second ?: "",
+                                genres = info?.first ?: emptyList(),
+                                year = e.optInt("year", 0),
+                                durationMs = e.optLong("duration", 0L),
+                                thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
+                                streamUrl = "${s.baseUrl}$part?$tokenQ"
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        return out
+    }
+}
+
+/** plex.tv/link style sign-in so nobody has to type a token on a TV. */
+object PlexAuth {
+    private const val PLEX_TV = "https://plex.tv"
+
+    class Pin(val id: Long, val code: String)
+
+    private fun h(clientId: String, token: String? = null): Map<String, String> {
+        val m = mutableMapOf(
+            "Accept" to "application/json",
+            "X-Plex-Client-Identifier" to clientId,
+            "X-Plex-Product" to "NovaTV",
+            "X-Plex-Version" to "1.0",
+            "X-Plex-Device-Name" to "NovaTV (Android TV)",
+            "X-Plex-Platform" to "Android"
+        )
+        if (token != null) m["X-Plex-Token"] = token
+        return m
+    }
+
+    fun createPin(clientId: String): Pin {
+        val body = FormBody.Builder().add("strong", "false").build()
+        val o = JSONObject(Http.post("$PLEX_TV/api/v2/pins", body, h(clientId)))
+        return Pin(o.getLong("id"), o.getString("code"))
+    }
+
+    /** Returns the auth token once the user has entered the code at plex.tv/link, else null. */
+    fun pollPin(pin: Pin, clientId: String): String? {
+        val o = JSONObject(Http.get("$PLEX_TV/api/v2/pins/${pin.id}?code=${pin.code}", h(clientId)))
+        return if (o.isNull("authToken")) null else o.getString("authToken")
+    }
+
+    /** Finds every Plex server the account can reach and picks a working address for each. */
+    fun discoverServers(token: String, clientId: String): List<Server> {
+        val arr = JSONArray(Http.get("$PLEX_TV/api/v2/resources?includeHttps=1&includeRelay=1", h(clientId, token)))
+        val result = ArrayList<Server>()
+        for (r in arr.objs()) {
+            if (!r.optString("provides").contains("server")) continue
+            val access = if (r.isNull("accessToken")) token else r.getString("accessToken")
+            val ordered = r.optJSONArray("connections").objs().sortedWith(
+                compareBy<JSONObject>(
+                    { if (it.optBoolean("local")) 0 else 1 },
+                    { if (it.optBoolean("relay")) 1 else 0 }
+                )
+            )
+            var chosen: String? = null
+            for (c in ordered) {
+                val uri = c.optString("uri").trimEnd('/')
+                if (uri.isEmpty()) continue
+                if (Http.ping("$uri/identity", h(clientId, access))) {
+                    chosen = uri
+                    break
+                }
+            }
+            if (chosen == null) continue
+            val name = r.optString("name", "Plex")
+            val cid = r.optString("clientIdentifier", name)
+            result.add(
+                Server(
+                    id = "plex-$cid",
+                    type = ServerType.PLEX,
+                    name = name,
+                    baseUrl = chosen,
+                    token = access
+                )
+            )
+        }
+        return result
+    }
+}

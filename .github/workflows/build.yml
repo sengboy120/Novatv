@@ -1,0 +1,47 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk NovaTV.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovaTV-apk
+          path: NovaTV.apk
+
+      # Optional: publishes NovaTV.apk to a "latest" release so the Shield's
+      # Downloader app can fetch it from a short link (works if the repo is public).
+      - name: Publish to "latest" release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NovaTV (latest build)
+          files: NovaTV.apk
