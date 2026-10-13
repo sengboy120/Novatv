@@ -1,5 +1,6 @@
 package app.novatv.ui
 
+import android.content.Context
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -44,13 +45,20 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioCapabilities
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import app.novatv.DtsMode
 import app.novatv.AppViewModel
 import app.novatv.Channel
 import app.novatv.Program
@@ -82,6 +90,34 @@ private fun errorText(e: PlaybackException): String {
     val name = e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')
     val cause = e.cause?.message?.lineSequence()?.firstOrNull()?.take(70) ?: ""
     return if (cause.isEmpty()) name else "$name: $cause"
+}
+
+/** Set from the server's stream info: is the audio track that is playing really DTS-HD (MA / HRA / X)? */
+object AudioHints {
+    @Volatile
+    var dtsHd: Boolean = false
+}
+
+/**
+ * MKV files usually label DTS-HD MA tracks "A_DTS", so ExoPlayer sends only the plain DTS core to the receiver.
+ * When the server says the track is DTS-HD we hand the sink a DTS-HD format instead, so the receiver gets the full stream.
+ */
+private class DtsHdSink(sink: AudioSink) : ForwardingAudioSink(sink) {
+    override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
+        val f = if (AudioHints.dtsHd && inputFormat.sampleMimeType == MimeTypes.AUDIO_DTS) {
+            inputFormat.buildUpon().setSampleMimeType(MimeTypes.AUDIO_DTS_HD).build()
+        } else {
+            inputFormat
+        }
+        super.configure(f, specifiedBufferSize, outputChannels)
+    }
+}
+
+private fun dtsHdOf(inf: StreamsInfo?, key: String?): Boolean {
+    if (inf == null) return false
+    val a = (if (key == null) null else inf.audio.firstOrNull { it.key == key })
+        ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
+    return a != null && Streams.isDtsHd(a)
 }
 
 @Composable
@@ -142,7 +178,33 @@ fun PlayerScreen(vm: AppViewModel) {
         )
     }
 
-    val exo = remember { ExoPlayer.Builder(ctx).build() }
+    val exo = remember {
+        val coreOnly = vm.playback.value.dtsMode == DtsMode.CORE
+        val rf = object : DefaultRenderersFactory(ctx) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink? {
+                if (!coreOnly) {
+                    val base = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                    return if (base == null) null else DtsHdSink(base)
+                }
+                // "DTS-HD: CORE ONLY": pretend the receiver can't take DTS-HD so ExoPlayer falls back to the DTS core
+                val caps = AudioCapabilities.getCapabilities(context)
+                val keep = listOf(
+                    C.ENCODING_PCM_16BIT, C.ENCODING_AC3, C.ENCODING_E_AC3, C.ENCODING_E_AC3_JOC,
+                    C.ENCODING_AC4, C.ENCODING_DTS, C.ENCODING_DOLBY_TRUEHD
+                ).filter { it == C.ENCODING_PCM_16BIT || caps.supportsEncoding(it) }.toIntArray()
+                return DefaultAudioSink.Builder(context)
+                    .setAudioCapabilities(AudioCapabilities(keep, 8))
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+            }
+        }
+        ExoPlayer.Builder(ctx, rf).build()
+    }
 
     DisposableEffect(exo) {
         val listener = object : Player.Listener {
@@ -278,6 +340,7 @@ fun PlayerScreen(vm: AppViewModel) {
             Prepared(PlayRequest(p.entry.streamUrl, null, emptyList(), startAt, false), null)
         }
         curInfo = prep.info
+        AudioHints.dtsHd = dtsHdOf(prep.info, audioKey ?: Streams.pickAudio(prep.info, playback.audioLang))
         curTranscoded = prep.req.transcoded
         // Plex HLS starts at the requested offset, so the player's own clock begins at 0 there.
         posBaseMs = if (prep.req.transcoded && prep.req.startMs == 0L) startAt else 0L
@@ -327,6 +390,7 @@ fun PlayerScreen(vm: AppViewModel) {
         playback.subLang, playback.audioLang, audioKey
     ) {
         val inf = curInfo
+        AudioHints.dtsHd = dtsHdOf(inf, effAudioKey)
         val b = exo.trackSelectionParameters.buildUpon()
             .setPreferredAudioLanguage(if (playback.audioLang.isEmpty()) null else playback.audioLang)
             .setPreferredTextLanguage(if (playback.subLang.isEmpty()) null else playback.subLang)
@@ -644,9 +708,10 @@ fun PlayerScreen(vm: AppViewModel) {
                 audioRows.add(
                     TrackRowData(Labels.audioLabel(st), detail, selected, supported) {
                         audioKey = st.key
+                        AudioHints.dtsHd = Streams.isDtsHd(st)
                         val c = Langs.canon(st.lang)
                         if (c.isNotEmpty()) vm.rememberLang(TrackKind.AUDIO, c)
-                        if (curTranscoded) vm.retune()
+                        if (curTranscoded || playback.dtsMode == DtsMode.CONVERT) vm.retune()
                     }
                 )
             }
@@ -696,7 +761,7 @@ fun PlayerScreen(vm: AppViewModel) {
         posEnabled = ownActive || nativeTextFallback,
         onPos = { dir, fast ->
             val step = if (fast) 3 else 1
-            vm.updatePlayback(playback.copy(subPos = (playback.subPos + dir * step).coerceIn(0, 50)))
+            vm.updatePlayback(playback.copy(subPos = (playback.subPos + dir * step).coerceIn(-20, 50)))
         },
         onPosReset = { vm.updatePlayback(playback.copy(subPos = 8)) },
         delayMs = subDelayMs,
@@ -785,7 +850,19 @@ fun PlayerScreen(vm: AppViewModel) {
                 }
             },
             update = { view ->
-                view.subtitleView?.setBottomPaddingFraction(playback.subPos.coerceIn(0, 60) / 100f)
+                view.subtitleView?.let { sv ->
+                    val pos = playback.subPos
+                    sv.setBottomPaddingFraction(pos.coerceIn(0, 60) / 100f)
+                    // below 0% the text is pushed down past the picture's bottom edge (into the black bar)
+                    sv.translationY = if (pos < 0) -pos / 100f * view.height else 0f
+                    if (pos < 0) {
+                        var par = sv.parent
+                        while (par is ViewGroup) {
+                            par.clipChildren = false
+                            par = par.parent
+                        }
+                    }
+                }
             },
             // full screen normally; shrinks into the guide's preview window while the guide is open
             modifier = if (guideOpen) {

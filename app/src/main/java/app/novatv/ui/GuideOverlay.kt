@@ -56,7 +56,10 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -128,6 +131,10 @@ fun GuideOverlay(
     }
 
     fun liveRequester(id: String): FocusRequester = liveRequesters.getOrPut(id) { FocusRequester() }
+    // one focus handle per channel cell (the name box on the far left of each row)
+    val cellRequesters = remember { HashMap<String, FocusRequester>() }
+    fun cellRequester(id: String): FocusRequester = cellRequesters.getOrPut(id) { FocusRequester() }
+    var cellId by remember { mutableStateOf<String?>(null) }
 
     /** Moves the focus to the programme that is on air now in channel number [i] (scrolling to it first). */
     fun jumpToLive(i: Int) {
@@ -199,6 +206,25 @@ fun GuideOverlay(
                 } else if (ev.key == Key.Menu) {
                     onClose()
                     true
+                } else if (ev.key == Key.DirectionLeft && zone == 0 && detail != null &&
+                    detail!!.second.startMs <= winStart + 1_000L
+                ) {
+                    // the first programme of a row: Left goes to that row's channel name box
+                    try {
+                        cellRequester(detail!!.first.id).requestFocus()
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+                } else if (ev.key == Key.DirectionRight && zone == 1 && cellId != null) {
+                    // from a channel name box, Right goes to what is on air now in that row
+                    val i = channels.indexOfFirst { it.id == cellId }
+                    if (i >= 0) {
+                        jumpToLive(i)
+                        true
+                    } else {
+                        false
+                    }
                 } else if (ev.key == Key.DirectionUp || ev.key == Key.DirectionDown) {
                     // Up / Down always land on what is on air NOW in the next channel, not on whatever
                     // programme happens to sit under the cursor.
@@ -322,7 +348,8 @@ fun GuideOverlay(
                                 liveFocus = liveRequester(ch.id),
                                 scroll = scroll,
                                 onTune = onTune,
-                                onCellFocus = { zone = 1 },
+                                cellFocus = cellRequester(ch.id),
+                                onCellFocus = { zone = 1; cellId = ch.id },
                                 onFocusProgram = { p -> focusProgram(ch, p) }
                             )
                         }
@@ -448,6 +475,7 @@ private fun GuideRow(
     nowMs: Long,
     isCurrent: Boolean,
     liveFocus: FocusRequester,
+    cellFocus: FocusRequester,
     scroll: Animatable<Float, *>,
     onTune: (Channel) -> Unit,
     onCellFocus: () -> Unit,
@@ -470,6 +498,7 @@ private fun GuideRow(
             onClick = { onTune(ch) },
             onFocus = onCellFocus,
             modifier = Modifier
+                .focusRequester(cellFocus)
                 .width(GuideMetrics.sideW)
                 .fillMaxHeight()
         )
@@ -526,7 +555,7 @@ private fun ChannelCell(
     ) {
         Text(
             "%02d".format(ch.number),
-            style = TextStyle(brush = acc.brush, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(brush = acc.brush, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold),
             modifier = Modifier.width(30.dp)
         )
         ChannelBadge(ch.iconKey, size = 32.dp, chId = ch.id)
@@ -536,6 +565,7 @@ private fun ChannelCell(
                 ch.name,
                 color = Color.White,
                 fontSize = 12.sp,
+                lineHeight = 16.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -554,6 +584,7 @@ private fun ChannelCell(
                     if (isCurrent) "ON NOW" else ch.kind.tag,
                     color = if (isCurrent) acc.c1 else Nova.textDim,
                     fontSize = 9.sp,
+                    lineHeight = 12.sp,
                     letterSpacing = 2.sp
                 )
             }
@@ -624,10 +655,21 @@ private fun ProgramBlock(
                 .offset { IntOffset((scroll.value - x0).coerceIn(0f, maxShift).dp.roundToPx(), 0) }
                 .padding(horizontal = 10.dp)
         ) {
+            val en = p.entry
+            val epTag = if (en.kind == app.novatv.EntryKind.EPISODE) en.subtitle else ""
+            val titleText = buildAnnotatedString {
+                append(en.displayTitle)
+                if (epTag.isNotEmpty()) {
+                    withStyle(SpanStyle(color = tint(Color.White, acc.c1, 0.65f), fontWeight = FontWeight.Bold, fontSize = 11.sp)) {
+                        append("  " + epTag)
+                    }
+                }
+            }
             Text(
-                p.entry.displayTitle,
+                titleText,
                 color = Color.White,
                 fontSize = 13.sp,
+                lineHeight = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -637,11 +679,12 @@ private fun ProgramBlock(
                     fmtTime(p.startMs) + "  ·  " + fmtDuration(p.durationMs),
                     color = if (isNow) tint(Color.White, acc.c1, 0.55f) else Nova.textDim,
                     fontSize = 10.sp,
+                    lineHeight = 13.sp,
                     maxLines = 1
                 )
                 if (isNow) {
                     Spacer(Modifier.width(6.dp))
-                    Text("NOW", color = acc.c2, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text("NOW", color = acc.c2, fontSize = 9.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 }
             }
         }
@@ -688,6 +731,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
             "CH ${"%02d".format(ch.number)}  ·  ${ch.name.uppercase()}  ·  ${ch.kind.tag}",
             color = acc.c1,
             fontSize = 11.sp,
+            lineHeight = 14.sp,
             letterSpacing = 2.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -696,6 +740,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
             e.displayTitle,
             color = Color.White,
             fontSize = 20.sp,
+            lineHeight = 25.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -712,6 +757,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
             meta.joinToString("  ·  "),
             color = Nova.text,
             fontSize = 12.sp,
+            lineHeight = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -719,12 +765,13 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
             Text(
                 e.overview,
                 color = Nova.textDim,
-                fontSize = 11.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(3.dp))
         val onAir = nowMs >= p.startMs && nowMs < p.endMs
         val ended = onAir && nowMs >= p.contentEndMs
         val timeLine = when {
@@ -737,6 +784,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
             timeLine,
             color = if (onAir) acc.c1 else Nova.text,
             fontSize = 12.sp,
+            lineHeight = 16.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

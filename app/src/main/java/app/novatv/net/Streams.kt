@@ -188,6 +188,14 @@ object Streams {
      * @param audioKey explicit audio stream chosen from the menu (null = use the preferred language)
      * @param subKey explicit subtitle stream chosen from the menu ("" = off, null = use preferred language)
      */
+    /** True for DTS-HD MA / HRA / DTS:X (not for the plain DTS core). */
+    fun isDtsHd(a: StreamInfo): Boolean {
+        val c = a.codec.lowercase()
+        if (!(c.startsWith("dts") || c == "dca")) return false
+        val f = dts(a.profile, a.title)
+        return f == "DTS-HD MA" || f == "DTS-HD HRA" || f == "DTS:X"
+    }
+
     fun build(
         s: Server,
         e: MediaEntry,

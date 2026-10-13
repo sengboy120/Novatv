@@ -231,6 +231,17 @@ fun SettingsScreen(vm: AppViewModel) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             NeonButton(
+                playback.dtsMode.label,
+                onClick = {
+                    val all = app.novatv.DtsMode.values()
+                    vm.updatePlayback(playback.copy(dtsMode = all[(playback.dtsMode.ordinal + 1) % all.size]))
+                },
+                accent = Nova.cyan
+            )
+            Text(playback.dtsMode.hint, color = Nova.textDim, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            NeonButton(
                 "SUBTITLES: " + langLabel(playback.subLang, "OFF"),
                 onClick = { vm.updatePlayback(playback.copy(subLang = nextLang(playback.subLang))) },
                 accent = Nova.magenta

@@ -76,7 +76,12 @@ class Store(context: Context) {
         maxMbps = prefs.getInt("maxMbps", 12),
         subLang = prefs.getString("subLang", "") ?: "",
         audioLang = prefs.getString("audioLang", "") ?: "",
-        subPos = prefs.getInt("subPos", 8)
+        subPos = prefs.getInt("subPos", 8),
+        dtsMode = try {
+            DtsMode.valueOf(prefs.getString("dtsMode", DtsMode.PASS.name) ?: DtsMode.PASS.name)
+        } catch (e: Exception) {
+            DtsMode.PASS
+        }
     )
 
     fun savePlayback(p: PlaybackSettings) {
@@ -86,6 +91,7 @@ class Store(context: Context) {
             .putString("subLang", p.subLang)
             .putString("audioLang", p.audioLang)
             .putInt("subPos", p.subPos)
+            .putString("dtsMode", p.dtsMode.name)
             .apply()
     }
 

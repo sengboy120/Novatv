@@ -282,7 +282,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     ): Prepared = withContext(Dispatchers.IO) {
         val saved = _playback.value
         // direct play failed for this title: let the server convert whatever the Shield couldn't handle
-        val p = if (forceTranscode && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
+        var p = if (forceTranscode && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
         val server = _servers.value.firstOrNull { it.id == e.serverId }
         if (server == null) {
             return@withContext Prepared(PlayRequest(e.streamUrl, null, emptyList(), offsetMs, false), null)
@@ -301,6 +301,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     infoCache[e.id] = fetched
                 }
             }
+        }
+        // "DTS-HD: CONVERT": let the server turn DTS-HD audio into Dolby Digital instead of sending it to the receiver
+        val inf = info
+        if (inf != null && p.mode == PlayMode.DIRECT && !forceDirect && saved.dtsMode == DtsMode.CONVERT) {
+            val ak = audioKey ?: Streams.pickAudio(inf, p.audioLang)
+            val a = (if (ak == null) null else inf.audio.firstOrNull { it.key == ak })
+                ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
+            if (a != null && Streams.isDtsHd(a)) p = p.copy(mode = PlayMode.SMART)
         }
         Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
     }

@@ -121,6 +121,13 @@ enum class PlayMode(val label: String, val hint: String) {
     TRANSCODE("ALWAYS TRANSCODE", "The server always converts to H.264 / AAC at the bitrate below. Best for slow or remote connections.")
 }
 
+/** What to do with DTS-HD / DTS:X audio (some receivers can't decode the HD part). */
+enum class DtsMode(val label: String, val hint: String) {
+    PASS("DTS-HD: PASSTHROUGH", "Sends the full DTS-HD MA / DTS:X stream to your receiver (it should show DTS-HD MA, not just DTS)."),
+    CORE("DTS-HD: CORE ONLY", "Sends only the plain DTS 5.1 core of DTS-HD tracks. Use this if the receiver shows nothing or noise on DTS-HD."),
+    CONVERT("DTS-HD: CONVERT", "The server converts DTS-HD tracks to Dolby Digital. Always plays, but the server has to work and subtitles may be burned in.")
+}
+
 data class PlaybackSettings(
     val mode: PlayMode = PlayMode.DIRECT,
     val maxMbps: Int = 12,
@@ -129,7 +136,8 @@ data class PlaybackSettings(
     /** 2-letter code or "" = use the file's default audio track. */
     val audioLang: String = "",
     /** Subtitle height: percent of the screen height between the bottom edge and the text. */
-    val subPos: Int = 8
+    val subPos: Int = 8,
+    val dtsMode: DtsMode = DtsMode.PASS
 )
 
 enum class TrackKind { AUDIO, SUBTITLE }
