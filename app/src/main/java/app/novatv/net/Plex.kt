@@ -190,7 +190,7 @@ object PlexApi {
                                 title = m.optString("title", "Untitled"),
                                 subtitle = "",
                                 series = "",
-                                network = "",
+                                network = m.optString("studio", ""),
                                 genres = tags(m.optJSONArray("Genre")),
                                 year = m.optInt("year", 0),
                                 durationMs = m.optLong("duration", 0L),

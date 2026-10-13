@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -126,6 +127,10 @@ fun SettingsScreen(vm: AppViewModel) {
     val channels by vm.channels.collectAsState()
     val first = remember { FocusRequester() }
 
+    val logoUrl by vm.logoUrl.collectAsState()
+    val logoMsg by vm.logoMsg.collectAsState()
+    DisposableEffect(Unit) { onDispose { vm.stopLogoServer() } }
+
     BackHandler { vm.back() }
     LaunchedEffect(Unit) {
         delay(150L)
@@ -153,7 +158,7 @@ fun SettingsScreen(vm: AppViewModel) {
         ToggleRow("Genre channels for series", settings.seriesGenres) {
             vm.updateSettings(settings.copy(seriesGenres = it))
         }
-        ToggleRow("Network / studio channels for series", settings.networks) {
+        ToggleRow("Studio / network channels (HBO, NBC, CBS, FOX, Disney+ …)", settings.networks) {
             vm.updateSettings(settings.copy(networks = it))
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -174,6 +179,26 @@ fun SettingsScreen(vm: AppViewModel) {
             )
             NeonButton("+", onClick = { vm.updateSettings(settings.copy(minItems = (settings.minItems + 2).coerceAtMost(60))) })
         }
+
+        SectionLabel("CHANNEL LOGOS")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NeonButton(
+                if (logoUrl == null) "UPLOAD LOGOS FROM PHONE / PC" else "STOP UPLOADER",
+                onClick = { if (logoUrl == null) vm.startLogoServer() else vm.stopLogoServer() },
+                accent = Color(0xFFFFB347)
+            )
+            if (logoUrl != null) {
+                Spacer(Modifier.width(18.dp))
+                Text(logoUrl ?: "", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Text(
+            if (logoUrl != null) "Open this address in a browser on a phone or PC on the same Wi-Fi, pick a channel and upload an image. The page closes when you leave Settings."
+            else if (logoMsg.isNotEmpty()) logoMsg
+            else "Channels show their name until you give them a logo. Start the uploader, then open the address it shows from any device on your network.",
+            color = Nova.textDim,
+            fontSize = 13.sp
+        )
 
         SectionLabel("PLAYBACK")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

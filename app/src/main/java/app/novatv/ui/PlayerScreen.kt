@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,6 +37,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
@@ -49,6 +52,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import app.novatv.AppViewModel
+import app.novatv.Channel
+import app.novatv.Program
 import app.novatv.PlayRequest
 import app.novatv.Prepared
 import app.novatv.Scheduler
@@ -66,6 +71,18 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+/** Audio / subtitle menu and channel surf are drawn at this fraction of their normal size. */
+private const val PANEL_SCALE = 0.75f
+
+/** What the full-screen slate says (between programmes, or when a title can't be played). */
+private class SlateMsg(val headline: String, val title: String, val detail: String, val isError: Boolean)
+
+private fun errorText(e: PlaybackException): String {
+    val name = e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')
+    val cause = e.cause?.message?.lineSequence()?.firstOrNull()?.take(70) ?: ""
+    return if (cause.isEmpty()) name else "$name: $cause"
+}
 
 @Composable
 fun PlayerScreen(vm: AppViewModel) {
@@ -90,7 +107,7 @@ fun PlayerScreen(vm: AppViewModel) {
     // playback state
     var playError by remember { mutableStateOf<String?>(null) }
     var playingId by remember { mutableStateOf("") }
-    var errorStreak by remember { mutableIntStateOf(0) }
+    var slate by remember { mutableStateOf<SlateMsg?>(null) }
     var guideNow by remember { mutableLongStateOf(vm.now()) }
     var tickNow by remember { mutableLongStateOf(vm.now()) }
     var posNow by remember { mutableLongStateOf(0L) }
@@ -111,6 +128,19 @@ fun PlayerScreen(vm: AppViewModel) {
     var ownFailed by remember { mutableStateOf(false) }
     var subDelayMs by remember { mutableLongStateOf(0L) }
     val forceDirect = remember { HashSet<String>() }
+    val forceTranscode = remember { HashSet<String>() }
+    val retried = remember { HashSet<String>() }
+
+    /** Slate for the time between the end of a film and the next slot on a "real" channel. */
+    fun gapSlate(c: Channel, p: Program): SlateMsg {
+        val nxt = Scheduler.programAt(c, p.endMs)
+        return SlateMsg(
+            "UP NEXT  ·  ${fmtTime(p.endMs)}",
+            nxt?.entry?.displayTitle ?: "Next programme",
+            nxt?.entry?.displaySub ?: "",
+            false
+        )
+    }
 
     val exo = remember { ExoPlayer.Builder(ctx).build() }
 
@@ -118,12 +148,22 @@ fun PlayerScreen(vm: AppViewModel) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
-                    errorStreak = 0
+                    retried.remove(playingId)
                 } else if (playbackState == Player.STATE_ENDED) {
                     val ch = vm.currentChannel()
                     val p = if (ch != null) Scheduler.programAt(ch, vm.now()) else null
-                    // File ended earlier than the schedule says -> move on; otherwise just re-sync.
-                    if (p != null && p.entry.id == playingId) vm.skipCurrentProgram() else vm.retune()
+                    if (ch != null && p != null && p.entry.id == playingId) {
+                        val left = p.endMs - vm.now()
+                        if (left > 5_000L && (ch.slotMs > 0L || left > 90_000L)) {
+                            // picture is over but the slot isn't: show what's next until the slot ends
+                            slate = gapSlate(ch, p)
+                        } else {
+                            // File ended a moment before the schedule says -> move on.
+                            vm.skipCurrentProgram()
+                        }
+                    } else {
+                        vm.retune()
+                    }
                 }
             }
 
@@ -137,20 +177,36 @@ fun PlayerScreen(vm: AppViewModel) {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                if (curTranscoded && !forceDirect.contains(playingId)) {
-                    // The server couldn't transcode this one: try the original file instead.
-                    forceDirect.add(playingId)
-                    playError = "Server transcode failed - trying direct play"
+                val id = playingId
+                val why = errorText(error)
+                val c = vm.currentChannel()
+                if (!retried.contains(id)) {
+                    // 1) one plain retry (network hiccups, the surface being resized ...)
+                    retried.add(id)
+                    playError = "Playback hiccup ($why) - retrying"
                     vm.retune()
-                    return
-                }
-                errorStreak += 1
-                if (errorStreak >= 4) {
-                    playError = "Playback keeps failing. Check that your media server is reachable."
-                    exo.stop()
+                } else if (curTranscoded && !forceTranscode.contains(id) && !forceDirect.contains(id)) {
+                    // 2a) the server's transcode failed: try the original file
+                    forceDirect.add(id)
+                    playError = "Server transcode failed ($why) - trying direct play"
+                    vm.retune()
+                } else if (!curTranscoded && !forceDirect.contains(id) && !forceTranscode.contains(id)) {
+                    // 2b) the Shield can't decode the original: let the server convert it
+                    forceTranscode.add(id)
+                    playError = "Direct play failed ($why) - asking the server to transcode"
+                    vm.retune()
                 } else {
-                    playError = "Can't play this title - skipping to the next one"
-                    vm.skipCurrentProgram()
+                    // give up on this title for now, but leave the schedule alone
+                    exo.stop()
+                    val p = if (c != null) Scheduler.programAt(c, vm.now()) else null
+                    val e = p?.entry
+                    slate = SlateMsg(
+                        "CAN'T PLAY THIS TITLE",
+                        e?.displayTitle ?: "",
+                        why + (if (p != null) "   ·   next programme at ${fmtTime(p.endMs)}" else ""),
+                        true
+                    )
+                    playError = null
                 }
             }
         }
@@ -183,6 +239,7 @@ fun PlayerScreen(vm: AppViewModel) {
         val ch = vm.currentChannel() ?: return@LaunchedEffect
         val now = vm.now()
         val p = Scheduler.programAt(ch, now) ?: return@LaunchedEffect
+        slate = null
         if (p.entry.id != playingId) {
             audioKey = null
             subKey = null
@@ -203,8 +260,18 @@ fun PlayerScreen(vm: AppViewModel) {
         val offset = (now - p.startMs).coerceAtLeast(0L)
         val startAt = ovr ?: (if (offset < 5_000L) 0L else offset)
 
+        // a "real" channel whose picture already ended: nothing to play until the next slot starts
+        if (ovr == null && p.endMs - p.contentEndMs > 5_000L && now >= p.contentEndMs - 1_500L) {
+            exo.stop()
+            slate = gapSlate(ch, p)
+            controlsTick += 1
+            delay((p.endMs - vm.now()).coerceAtLeast(500L))
+            vm.retune()
+            return@LaunchedEffect
+        }
+
         val prep: Prepared = try {
-            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey)
+            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id))
         } catch (ex: CancellationException) {
             throw ex
         } catch (ex: Exception) {
@@ -305,7 +372,7 @@ fun PlayerScreen(vm: AppViewModel) {
     }
     LaunchedEffect(playError) {
         if (playError != null) {
-            delay(4_000L)
+            delay(7_000L)
             playError = null
         }
     }
@@ -353,9 +420,10 @@ fun PlayerScreen(vm: AppViewModel) {
 
     fun restart() {
         live = false
-        if (!curTranscoded) {
+        if (!curTranscoded && exo.playbackState != Player.STATE_IDLE) {
             exo.seekTo(0L)
             exo.playWhenReady = true
+            slate = null
         } else {
             startOverrideMs = 0L
             vm.retune()
@@ -734,7 +802,12 @@ fun PlayerScreen(vm: AppViewModel) {
             EmptyState(busy, status, Modifier.align(Alignment.Center))
         }
 
-        if (ownActive && !guideOpen) {
+        val sl = slate
+        if (sl != null && ch != null && !guideOpen) {
+            Slate(ch, sl.headline, sl.title, sl.detail, sl.isError)
+        }
+
+        if (ownActive && !guideOpen && sl == null) {
             SubtitleOverlay(cues, subDelayMs, playback.subPos, { exo.currentPosition })
         }
 
@@ -792,31 +865,34 @@ fun PlayerScreen(vm: AppViewModel) {
             )
         }
 
-        AnimatedVisibility(
-            visible = surfOpen,
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 28.dp),
-            enter = fadeIn() + slideInHorizontally { it / 2 },
-            exit = fadeOut() + slideOutHorizontally { it / 2 }
-        ) {
-            SurfPanel(channels, surfIdx, tickNow, currentId)
-        }
+        // the channel-surf and audio / subtitle panels are drawn smaller than everything else
+        val baseDensity = LocalDensity.current
+        val panelDensity = remember(baseDensity) { Density(baseDensity.density * PANEL_SCALE, baseDensity.fontScale) }
+        CompositionLocalProvider(LocalDensity provides panelDensity) {
+            AnimatedVisibility(
+                visible = surfOpen,
+                modifier = Modifier.align(Alignment.CenterEnd),
+                enter = fadeIn() + slideInHorizontally { it / 2 },
+                exit = fadeOut() + slideOutHorizontally { it / 2 }
+            ) {
+                SurfPanel(channels, surfIdx, tickNow, currentId)
+            }
 
-        AnimatedVisibility(
-            visible = trackMenuOpen,
-            modifier = Modifier.align(Alignment.CenterEnd),
-            enter = fadeIn() + slideInHorizontally { it / 2 },
-            exit = fadeOut() + slideOutHorizontally { it / 2 }
-        ) {
-            TrackMenu(
-                formatLines = formatLines,
-                subs = subRows,
-                audio = audioRows,
-                transcoded = curTranscoded,
-                adjust = adjust,
-                onClose = { trackMenuOpen = false }
-            )
+            AnimatedVisibility(
+                visible = trackMenuOpen,
+                modifier = Modifier.align(Alignment.CenterEnd),
+                enter = fadeIn() + slideInHorizontally { it / 2 },
+                exit = fadeOut() + slideOutHorizontally { it / 2 }
+            ) {
+                TrackMenu(
+                    formatLines = formatLines,
+                    subs = subRows,
+                    audio = audioRows,
+                    transcoded = curTranscoded,
+                    adjust = adjust,
+                    onClose = { trackMenuOpen = false }
+                )
+            }
         }
 
         if (busy && channels.isNotEmpty()) {

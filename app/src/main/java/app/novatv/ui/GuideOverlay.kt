@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,21 +62,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.requiredWidth
 import app.novatv.Channel
 import app.novatv.Program
 import app.novatv.Scheduler
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.TimeZone
 
 /** Sizes shared between the guide and the player (which shrinks the video into the preview window). */
 object GuideMetrics {
-    val previewW = 224.dp
-    val previewH = 126.dp
+    val previewW = 272.dp
+    val previewH = 153.dp
     val previewTop = 54.dp
     val previewEnd = 32.dp
 
     val sideW = 190.dp
-    val rowH = 48.dp
+    val rowH = 44.dp
     val gutter = 8.dp
 
     /** Timeline scale: 4 dp per minute -> a 90 minute movie is 360 dp wide. */
@@ -103,7 +108,9 @@ fun GuideOverlay(
     onClose: () -> Unit
 ) {
     val listState = rememberLazyListState()
-    val startFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    // one focus handle per channel row: it is attached to that row's programme that is on air right now
+    val liveRequesters = remember { HashMap<String, FocusRequester>() }
     val curIdx = channels.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
     // the timeline starts half an hour before the last half-hour mark and stays put while the guide is open
     val winStart = remember { floorHalfHour(nowMs) - HALF_HOUR }
@@ -111,21 +118,55 @@ fun GuideOverlay(
     var detail by remember { mutableStateOf<Pair<Channel, Program>?>(null) }
     var focusEnd by remember { mutableStateOf<Long?>(null) }
     var scrollTarget by remember { mutableFloatStateOf(0f) }
+    // where the D-pad focus is: 0 = a programme block, 1 = a channel cell, 2 = the SETTINGS button
+    var zone by remember { mutableIntStateOf(0) }
     val scroll = remember { Animatable(0f) }
+    var jumpJob by remember { mutableStateOf<Job?>(null) }
 
     LaunchedEffect(scrollTarget) {
         scroll.animateTo(scrollTarget, tween(220))
     }
 
+    fun liveRequester(id: String): FocusRequester = liveRequesters.getOrPut(id) { FocusRequester() }
+
+    /** Moves the focus to the programme that is on air now in channel number [i] (scrolling to it first). */
+    fun jumpToLive(i: Int) {
+        if (i < 0 || i >= channels.size) return
+        jumpJob?.cancel()
+        jumpJob = scope.launch {
+            val vis = listState.layoutInfo.visibleItemsInfo
+            val first = vis.firstOrNull()?.index ?: 0
+            val last = vis.lastOrNull()?.index ?: 0
+            if (i < first || i > last) {
+                listState.scrollToItem((i - 2).coerceAtLeast(0))
+                delay(60)
+            }
+            val req = liveRequester(channels[i].id)
+            var tries = 0
+            while (tries < 4) {
+                try {
+                    req.requestFocus()
+                    break
+                } catch (e: Exception) {
+                    tries += 1
+                    delay(50)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         listState.scrollToItem((curIdx - 2).coerceAtLeast(0))
-        delay(120)
+        delay(150)
+        val req = liveRequester(channels.getOrNull(curIdx)?.id ?: "")
         try {
-            startFocus.requestFocus()
+            req.requestFocus()
         } catch (e: Exception) {
             // row not laid out yet; the user can still navigate with the D-pad
         }
     }
+
+    val accent = remember(detail?.first?.iconKey) { accentOf(detail?.first?.iconKey ?: "") }
 
     BoxWithConstraints(
         Modifier
@@ -137,7 +178,7 @@ fun GuideOverlay(
                 val t = GuideMetrics.previewTop.toPx()
                 val b = t + GuideMetrics.previewH.toPx()
                 val brush = Brush.verticalGradient(
-                    listOf(Color(0xF506081A), Color(0xF8130A2A)),
+                    listOf(Color(0xF5090910), Color(0xF8160D1E)),
                     startY = 0f,
                     endY = size.height
                 )
@@ -153,9 +194,34 @@ fun GuideOverlay(
                 )
             }
             .onPreviewKeyEvent { ev ->
-                if (ev.type == KeyEventType.KeyDown && ev.key == Key.Menu) {
+                if (ev.type != KeyEventType.KeyDown) {
+                    false
+                } else if (ev.key == Key.Menu) {
                     onClose()
                     true
+                } else if (ev.key == Key.DirectionUp || ev.key == Key.DirectionDown) {
+                    // Up / Down always land on what is on air NOW in the next channel, not on whatever
+                    // programme happens to sit under the cursor.
+                    val d = detail
+                    val down = ev.key == Key.DirectionDown
+                    val idx = if (d == null) curIdx else channels.indexOfFirst { it.id == d.first.id }
+                    if (zone == 2) {
+                        if (down) {
+                            jumpToLive(if (idx < 0) curIdx else idx)
+                            true
+                        } else {
+                            false
+                        }
+                    } else if (zone != 0 || d == null || idx < 0) {
+                        false
+                    } else if (!down && idx == 0) {
+                        false // top row: let the focus reach the SETTINGS button
+                    } else if (down && idx >= channels.size - 1) {
+                        true
+                    } else {
+                        jumpToLive(if (down) idx + 1 else idx - 1)
+                        true
+                    }
                 } else {
                     false
                 }
@@ -166,13 +232,22 @@ fun GuideOverlay(
         val maxScroll = (totalDp - viewportDp).coerceAtLeast(0f)
 
         fun focusProgram(ch: Channel, p: Program) {
+            zone = 0
             detail = Pair(ch, p)
-            focusEnd = p.endMs
+            focusEnd = p.contentEndMs
             val x0 = minToDp(p.startMs, winStart)
-            val w = p.durationMs / 60_000f * GuideMetrics.DP_PER_MIN
+            val w = p.spanMs / 60_000f * GuideMetrics.DP_PER_MIN
             val t = scrollTarget
             var nt = t
-            if (x0 < t) {
+            val onAir = nowMs >= p.startMs && nowMs < p.endMs
+            if (onAir) {
+                // keep the red "now" line in view; only scroll when the block is (almost) off screen
+                if (x0 + w < t + 120f) {
+                    nt = x0 - 12f
+                } else if (x0 > t + viewportDp - 120f) {
+                    nt = x0 + w - viewportDp + 12f
+                }
+            } else if (x0 < t) {
                 nt = x0 - 12f
             } else if (x0 + w > t + viewportDp) {
                 nt = Math.min(x0 + w - viewportDp + 12f, x0 - 12f)
@@ -207,7 +282,9 @@ fun GuideOverlay(
                 Spacer(Modifier.weight(1f))
                 Text(fmtTime(nowMs), color = Nova.text, fontSize = 20.sp, fontWeight = FontWeight.Light)
                 Spacer(Modifier.width(18.dp))
-                NeonButton("SETTINGS", onClick = onSettings, accent = Nova.violet, compact = true)
+                Box(Modifier.onFocusChanged { if (it.hasFocus) zone = 2 }) {
+                    NeonButton("SETTINGS", onClick = onSettings, accent = Nova.violet, compact = true)
+                }
             }
             Spacer(Modifier.height(2.dp))
 
@@ -217,7 +294,7 @@ fun GuideOverlay(
                     .fillMaxWidth()
                     .height(GuideMetrics.previewH)
             ) {
-                DetailPanel(detail, nowMs, Modifier.weight(1f).fillMaxHeight())
+                DetailPanel(detail, nowMs, accent, Modifier.weight(1f).fillMaxHeight())
                 Spacer(Modifier.width(GuideMetrics.previewW + 16.dp))
             }
             Spacer(Modifier.height(8.dp))
@@ -229,7 +306,7 @@ fun GuideOverlay(
                     .fillMaxWidth()
             ) {
                 Column(Modifier.fillMaxSize()) {
-                    Ruler(winStart, nowMs, focusEnd, scroll)
+                    Ruler(winStart, nowMs, focusEnd, accent.c1, scroll)
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.weight(1f),
@@ -242,9 +319,10 @@ fun GuideOverlay(
                                 winStart = winStart,
                                 nowMs = nowMs,
                                 isCurrent = ch.id == currentId,
-                                startFocus = if (ch.id == currentId) startFocus else null,
+                                liveFocus = liveRequester(ch.id),
                                 scroll = scroll,
                                 onTune = onTune,
+                                onCellFocus = { zone = 1 },
                                 onFocusProgram = { p -> focusProgram(ch, p) }
                             )
                         }
@@ -272,7 +350,7 @@ fun GuideOverlay(
                         val x = x0 + (minToDp(fe, winStart) - scroll.value).dp.toPx()
                         if (x >= x0 && x <= size.width) {
                             drawLine(
-                                color = Nova.cyan.copy(alpha = 0.9f),
+                                color = accent.c1.copy(alpha = 0.95f),
                                 start = Offset(x, 0f),
                                 end = Offset(x, h),
                                 strokeWidth = 3f,
@@ -301,7 +379,7 @@ fun GuideOverlay(
 // ------------------------------------------------------------------------------------------------
 
 @Composable
-private fun Ruler(winStart: Long, nowMs: Long, focusEnd: Long?, scroll: Animatable<Float, *>) {
+private fun Ruler(winStart: Long, nowMs: Long, focusEnd: Long?, endColor: Color, scroll: Animatable<Float, *>) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -331,7 +409,7 @@ private fun Ruler(winStart: Long, nowMs: Long, focusEnd: Long?, scroll: Animatab
             }
             RulerTag(fmtTime(nowMs), minToDp(nowMs, winStart), scroll, Color(0xFFFF4D6D), Color.White)
             if (focusEnd != null) {
-                RulerTag("ENDS " + fmtTime(focusEnd), minToDp(focusEnd, winStart), scroll, Nova.cyan, Color(0xFF05060F))
+                RulerTag("ENDS " + fmtTime(focusEnd), minToDp(focusEnd, winStart), scroll, endColor, Color(0xFF05060F))
             }
         }
     }
@@ -343,8 +421,8 @@ private fun RulerTag(text: String, xDp: Float, scroll: Animatable<Float, *>, bg:
     val shape = RoundedCornerShape(50)
     Box(
         Modifier
-            .offset { IntOffset((xDp - scroll.value).dp.roundToPx() - 34.dp.roundToPx(), 0) }
-            .width(68.dp)
+            .offset { IntOffset((xDp - scroll.value).dp.roundToPx() - 52.dp.roundToPx(), 0) }
+            .requiredWidth(104.dp)
             .height(18.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -352,9 +430,9 @@ private fun RulerTag(text: String, xDp: Float, scroll: Animatable<Float, *>, bg:
             Modifier
                 .clip(shape)
                 .background(bg)
-                .padding(horizontal = 8.dp, vertical = 1.dp)
+                .padding(horizontal = 9.dp, vertical = 1.dp)
         ) {
-            Text(text, color = fg, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(text, color = fg, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
         }
     }
 }
@@ -369,14 +447,16 @@ private fun GuideRow(
     winStart: Long,
     nowMs: Long,
     isCurrent: Boolean,
-    startFocus: FocusRequester?,
+    liveFocus: FocusRequester,
     scroll: Animatable<Float, *>,
     onTune: (Channel) -> Unit,
+    onCellFocus: () -> Unit,
     onFocusProgram: (Program) -> Unit
 ) {
     val programs = remember(ch.id, winStart) {
         Scheduler.upcoming(ch, winStart, GuideMetrics.WINDOW_MIN * 60_000L, 40)
     }
+    val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -385,8 +465,10 @@ private fun GuideRow(
     ) {
         ChannelCell(
             ch = ch,
+            acc = acc,
             isCurrent = isCurrent,
             onClick = { onTune(ch) },
+            onFocus = onCellFocus,
             modifier = Modifier
                 .width(GuideMetrics.sideW)
                 .fillMaxHeight()
@@ -402,11 +484,12 @@ private fun GuideRow(
                 val isNow = nowMs >= p.startMs && nowMs < p.endMs
                 ProgramBlock(
                     p = p,
+                    acc = acc,
                     winStart = winStart,
                     nowMs = nowMs,
                     isNow = isNow,
                     scroll = scroll,
-                    focusRequester = if (isNow) startFocus else null,
+                    focusRequester = if (isNow) liveFocus else null,
                     onClick = { onTune(ch) },
                     onFocus = { onFocusProgram(p) }
                 )
@@ -418,30 +501,35 @@ private fun GuideRow(
 @Composable
 private fun ChannelCell(
     ch: Channel,
+    acc: Accent,
     isCurrent: Boolean,
     onClick: () -> Unit,
+    onFocus: () -> Unit,
     modifier: Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(12.dp)
-    val border: Brush = if (focused) Nova.neon else SolidColor(Color(0x331E2A5A))
+    val border: Brush = if (focused) acc.brush else SolidColor(acc.c1.copy(alpha = 0.28f))
     Row(
         modifier
-            .shadow(if (focused) 14.dp else 0.dp, shape, ambientColor = Nova.cyan, spotColor = Nova.cyan)
+            .shadow(if (focused) 14.dp else 0.dp, shape, ambientColor = acc.c1, spotColor = acc.c1)
             .clip(shape)
-            .background(if (focused) Nova.panelHi else Nova.panel)
+            .background(tint(Nova.panel, acc.c1, if (focused) 0.34f else 0.16f))
             .border(if (focused) 2.dp else 1.dp, border, shape)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus()
+            }
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             "%02d".format(ch.number),
-            style = TextStyle(brush = Nova.neon, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(brush = acc.brush, fontSize = 18.sp, fontWeight = FontWeight.Bold),
             modifier = Modifier.width(30.dp)
         )
-        ChannelBadge(ch.iconKey, size = 34.dp)
+        ChannelBadge(ch.iconKey, size = 32.dp, chId = ch.id)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -458,13 +546,13 @@ private fun ChannelCell(
                         Modifier
                             .size(6.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(Nova.cyan)
+                            .background(acc.c1)
                     )
                     Spacer(Modifier.width(5.dp))
                 }
                 Text(
                     if (isCurrent) "ON NOW" else ch.kind.tag,
-                    color = if (isCurrent) Nova.cyan else Nova.textDim,
+                    color = if (isCurrent) acc.c1 else Nova.textDim,
                     fontSize = 9.sp,
                     letterSpacing = 2.sp
                 )
@@ -477,6 +565,7 @@ private fun ChannelCell(
 @Composable
 private fun ProgramBlock(
     p: Program,
+    acc: Accent,
     winStart: Long,
     nowMs: Long,
     isNow: Boolean,
@@ -488,28 +577,27 @@ private fun ProgramBlock(
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(10.dp)
     val x0 = minToDp(p.startMs, winStart)
-    val w = Math.max(p.durationMs / 60_000f * GuideMetrics.DP_PER_MIN, 56f)
+    val w = Math.max(p.spanMs / 60_000f * GuideMetrics.DP_PER_MIN, 56f)
     val border: Brush = when {
-        focused -> Nova.neon
-        isNow -> SolidColor(Nova.cyan.copy(alpha = 0.45f))
-        else -> SolidColor(Color(0x331E2A5A))
+        focused -> acc.brush
+        isNow -> SolidColor(acc.c1.copy(alpha = 0.65f))
+        else -> SolidColor(acc.c1.copy(alpha = 0.2f))
     }
     val base = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+    val bg = when {
+        focused -> tint(Nova.panelHi, acc.c1, 0.38f)
+        isNow -> tint(Nova.panel, acc.c1, 0.27f)
+        else -> tint(Nova.panel, acc.c1, 0.11f)
+    }
 
     Box(
         base
             .offset { IntOffset((x0 - scroll.value).dp.roundToPx(), 0) }
             .width((w - 3f).dp)
             .fillMaxHeight()
-            .shadow(if (focused) 12.dp else 0.dp, shape, ambientColor = Nova.magenta, spotColor = Nova.magenta)
+            .shadow(if (focused) 12.dp else 0.dp, shape, ambientColor = acc.c2, spotColor = acc.c2)
             .clip(shape)
-            .background(
-                when {
-                    focused -> Nova.panelHi
-                    isNow -> Color(0xFF131B3C)
-                    else -> Nova.panel
-                }
-            )
+            .background(bg)
             .border(if (focused) 2.dp else 1.dp, border, shape)
             .onFocusChanged {
                 focused = it.isFocused
@@ -517,6 +605,17 @@ private fun ProgramBlock(
             }
             .clickable(onClick = onClick)
     ) {
+        // slotted channels: the part of the slot after the picture ends is drawn darker
+        val gapMin = (p.spanMs - p.durationMs) / 60_000f
+        if (gapMin >= 3f) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width((gapMin * GuideMetrics.DP_PER_MIN).dp)
+                    .background(Color(0x66000000))
+            )
+        }
         // keep the title readable when the left part of the block has scrolled out of view
         val maxShift = Math.max(w - 100f, 0f)
         Column(
@@ -536,13 +635,13 @@ private fun ProgramBlock(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     fmtTime(p.startMs) + "  ·  " + fmtDuration(p.durationMs),
-                    color = if (isNow) Nova.cyan else Nova.textDim,
+                    color = if (isNow) tint(Color.White, acc.c1, 0.55f) else Nova.textDim,
                     fontSize = 10.sp,
                     maxLines = 1
                 )
                 if (isNow) {
                     Spacer(Modifier.width(6.dp))
-                    Text("NOW", color = Nova.magenta, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text("NOW", color = acc.c2, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 }
             }
         }
@@ -551,9 +650,9 @@ private fun ProgramBlock(
             Box(
                 Modifier
                     .align(Alignment.BottomStart)
-                    .fillMaxWidth(frac)
+                    .fillMaxWidth(frac * (p.durationMs.toFloat() / p.spanMs.toFloat()))
                     .height(3.dp)
-                    .background(Nova.neon)
+                    .background(acc.brush)
             )
         }
     }
@@ -564,13 +663,13 @@ private fun ProgramBlock(
 // ------------------------------------------------------------------------------------------------
 
 @Composable
-private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, modifier: Modifier) {
+private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accent, modifier: Modifier) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier
             .clip(shape)
-            .background(Color(0xCC0B0F24))
-            .border(1.dp, Color(0x332AF5FF), shape)
+            .background(tint(Color(0xE60C0C13), acc.c1, 0.09f))
+            .border(1.dp, acc.c1.copy(alpha = 0.55f), shape)
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.Center
     ) {
@@ -587,7 +686,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, modifier: 
         val e = p.entry
         Text(
             "CH ${"%02d".format(ch.number)}  ·  ${ch.name.uppercase()}  ·  ${ch.kind.tag}",
-            color = Nova.cyan,
+            color = acc.c1,
             fontSize = 11.sp,
             letterSpacing = 2.sp,
             maxLines = 1,
@@ -621,20 +720,22 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, modifier: 
                 e.overview,
                 color = Nova.textDim,
                 fontSize = 11.sp,
-                maxLines = 2,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
         }
         Spacer(Modifier.height(4.dp))
         val onAir = nowMs >= p.startMs && nowMs < p.endMs
+        val ended = onAir && nowMs >= p.contentEndMs
         val timeLine = when {
-            onAir -> "${fmtTime(p.startMs)} – ${fmtTime(p.endMs)}   ·   ends ${fmtTime(p.endMs)}   ·   ${fmtDuration(p.endMs - nowMs)} left"
-            nowMs < p.startMs -> "Starts ${fmtTime(p.startMs)}   ·   ends ${fmtTime(p.endMs)}   ·   in ${fmtDuration(p.startMs - nowMs)}"
-            else -> "Aired ${fmtTime(p.startMs)} – ${fmtTime(p.endMs)}"
+            ended -> "Finished ${fmtTime(p.contentEndMs)}   ·   next starts ${fmtTime(p.endMs)}"
+            onAir -> "${fmtTime(p.startMs)} – ${fmtTime(p.contentEndMs)}   ·   ends ${fmtTime(p.contentEndMs)}   ·   ${fmtDuration(p.contentEndMs - nowMs)} left"
+            nowMs < p.startMs -> "Starts ${fmtTime(p.startMs)}   ·   ends ${fmtTime(p.contentEndMs)}   ·   in ${fmtDuration(p.startMs - nowMs)}"
+            else -> "Aired ${fmtTime(p.startMs)} – ${fmtTime(p.contentEndMs)}"
         }
         Text(
             timeLine,
-            color = if (onAir) Nova.cyan else Nova.text,
+            color = if (onAir) acc.c1 else Nova.text,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -654,7 +755,7 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, modifier: 
                     Modifier
                         .fillMaxWidth(frac)
                         .fillMaxHeight()
-                        .background(Nova.neon)
+                        .background(acc.brush)
                 )
             }
         }

@@ -8,3 +8,8 @@
 /captures/
 .externalNativeBuild/
 .cxx/
+
+# files that must not end up in the repo
+*.apk
+*.zip
+*.exe

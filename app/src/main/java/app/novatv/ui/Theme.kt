@@ -2,15 +2,17 @@ package app.novatv.ui
 
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import app.novatv.RealChannels
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /** NovaTV palette: deep space background with cyan / magenta / violet neon accents. */
 object Nova {
-    val bg = Color(0xFF05060F)
-    val panel = Color(0xFF0E1226)
-    val panelHi = Color(0xFF191F42)
+    val bg = Color(0xFF07070D)
+    val panel = Color(0xFF111119)
+    val panelHi = Color(0xFF20202E)
     val cyan = Color(0xFF2AF5FF)
     val magenta = Color(0xFFFF5CD6)
     val violet = Color(0xFF8A7BFF)
@@ -39,3 +41,22 @@ fun fmtPos(ms: Long): String {
 }
 
 fun fmtDate(ms: Long): String = SimpleDateFormat("EEE d/M", Locale.getDefault()).format(Date(ms))
+
+/** The two colours a channel is drawn in (taken from its icon, or from its brand for real channels). */
+class Accent(val c1: Color, val c2: Color) {
+    val brush: Brush = Brush.horizontalGradient(listOf(c1, c2))
+}
+
+private val defaultAccent = Accent(Nova.cyan, Nova.magenta)
+
+fun accentOf(iconKey: String): Accent {
+    if (iconKey.startsWith("rc:")) {
+        val rc = RealChannels.byKey(iconKey.removePrefix("rc:"))
+        if (rc != null) return Accent(Color(rc.c1), Color(rc.c2))
+    }
+    val def = IconData.icons[iconKey] ?: return defaultAccent
+    return Accent(Color(def.c1), Color(def.c2))
+}
+
+/** [top] tinted into [base] by [f] (0 = base, 1 = top). */
+fun tint(base: Color, top: Color, f: Float): Color = lerp(base, top, f)

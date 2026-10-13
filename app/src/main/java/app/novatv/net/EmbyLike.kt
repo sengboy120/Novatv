@@ -68,13 +68,14 @@ object EmbyLike {
         val seriesInfo = HashMap<String, Pair<List<String>, String>>()
         for (o in items(s, "Series", "Genres,Studios")) {
             val genres = o.optJSONArray("Genres").strings()
-            val studio = o.optJSONArray("Studios").objs().firstOrNull()?.optString("Name", "") ?: ""
+            val studio = o.optJSONArray("Studios").objs()
+                .map { it.optString("Name", "") }.filter { it.isNotEmpty() }.joinToString(" | ")
             seriesInfo[o.optString("Id")] = Pair(genres, studio)
         }
 
         val out = ArrayList<MediaEntry>()
 
-        for (o in items(s, "Movie", "Genres,RunTimeTicks,ProductionYear,Overview,OfficialRating,CommunityRating")) {
+        for (o in items(s, "Movie", "Genres,Studios,RunTimeTicks,ProductionYear,Overview,OfficialRating,CommunityRating")) {
             val id = o.optString("Id")
             if (id.isEmpty()) continue
             out.add(
@@ -86,7 +87,8 @@ object EmbyLike {
                     title = o.optString("Name", "Untitled"),
                     subtitle = "",
                     series = "",
-                    network = "",
+                    network = o.optJSONArray("Studios").objs()
+                        .map { it.optString("Name", "") }.filter { it.isNotEmpty() }.joinToString(" | "),
                     genres = o.optJSONArray("Genres").strings(),
                     year = o.optInt("ProductionYear", 0),
                     durationMs = o.optLong("RunTimeTicks", 0L) / 10_000L,

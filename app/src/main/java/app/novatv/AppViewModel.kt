@@ -21,6 +21,56 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = Store(app)
 
+    init {
+        Logos.init(app)
+    }
+
+    // ---- channel-logo uploader (LAN web page) ----------------------------------------------------
+
+    private var logoServer: LogoServer? = null
+    private val _logoUrl = MutableStateFlow<String?>(null)
+    /** "http://192.168.x.y:8080" while the uploader is running, else null. */
+    val logoUrl: StateFlow<String?> = _logoUrl.asStateFlow()
+    private val _logoMsg = MutableStateFlow("")
+    val logoMsg: StateFlow<String> = _logoMsg.asStateFlow()
+
+    fun startLogoServer() {
+        if (logoServer != null) return
+        val ip = LogoServer.localIp()
+        if (ip == null) {
+            _logoMsg.value = "No Wi-Fi / Ethernet address found - connect the TV to your network first."
+            return
+        }
+        for (port in 8080..8089) {
+            try {
+                val srv = LogoServer(port) { _channels.value }
+                srv.start(5000, false)
+                logoServer = srv
+                _logoUrl.value = "http://$ip:$port"
+                _logoMsg.value = ""
+                return
+            } catch (e: Exception) {
+                // port busy - try the next one
+            }
+        }
+        _logoMsg.value = "Could not start the uploader (ports 8080-8089 are busy)."
+    }
+
+    fun stopLogoServer() {
+        try {
+            logoServer?.stop()
+        } catch (e: Exception) {
+            // ignore
+        }
+        logoServer = null
+        _logoUrl.value = null
+    }
+
+    override fun onCleared() {
+        stopLogoServer()
+        super.onCleared()
+    }
+
     private val _servers = MutableStateFlow(store.loadServers())
     val servers: StateFlow<List<Server>> = _servers.asStateFlow()
 
@@ -227,9 +277,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         offsetMs: Long,
         forceDirect: Boolean,
         audioKey: String?,
-        subKey: String?
+        subKey: String?,
+        forceTranscode: Boolean = false
     ): Prepared = withContext(Dispatchers.IO) {
-        val p = _playback.value
+        val saved = _playback.value
+        // direct play failed for this title: let the server convert whatever the Shield couldn't handle
+        val p = if (forceTranscode && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
         val server = _servers.value.firstOrNull { it.id == e.serverId }
         if (server == null) {
             return@withContext Prepared(PlayRequest(e.streamUrl, null, emptyList(), offsetMs, false), null)

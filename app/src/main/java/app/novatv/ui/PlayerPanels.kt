@@ -108,22 +108,25 @@ fun TrackMenu(
             // ignore
         }
     }
+    val edge = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp)
     Box(
         Modifier
             .fillMaxHeight()
-            .width(500.dp)
-            .background(Brush.horizontalGradient(listOf(Color(0x00060814), Color(0xF2080A1E), Color(0xFA0B0720))))
+            .width(270.dp)
+            .clip(edge)
+            .background(Color(0xF2090910))
+            .border(1.dp, Brush.verticalGradient(listOf(Color(0x552AF5FF), Color(0x55FF5CD6))), edge)
     ) {
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(start = 64.dp, end = 28.dp, top = 28.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp)
+                .padding(start = 12.dp, end = 8.dp, top = 18.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
                 "AUDIO & SUBTITLES",
-                style = TextStyle(brush = Nova.neon, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 4.sp)
+                style = TextStyle(brush = Nova.neon, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
             )
             if (formatLines.isNotEmpty()) FormatCard(formatLines)
             if (transcoded) {
@@ -140,17 +143,17 @@ fun TrackMenu(
             }
 
             AdjustRow(
-                label = "Subtitle position",
-                value = "${adjust.posPct}% from bottom",
-                hint = "◀ lower   higher ▶   OK = reset",
+                label = "Sub position",
+                value = "${adjust.posPct}%",
+                hint = "◀ lower  higher ▶  OK reset",
                 enabled = adjust.posEnabled,
                 onStep = adjust.onPos,
                 onReset = adjust.onPosReset
             )
             AdjustRow(
-                label = "Subtitle delay",
+                label = "Sub delay",
                 value = fmtDelay(adjust.delayMs),
-                hint = "◀ earlier   later ▶   OK = reset",
+                hint = "◀ earlier  later ▶  OK reset",
                 enabled = adjust.delayEnabled,
                 onStep = adjust.onDelay,
                 onReset = adjust.onDelayReset
@@ -182,9 +185,9 @@ private fun FormatCard(lines: List<String>) {
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Color(0x990A0E22))
+            .background(Color(0x990D0D14))
             .border(1.dp, Color(0x332AF5FF), shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
     ) {
         Text("NOW PLAYING", color = Nova.cyan, fontSize = 10.sp, letterSpacing = 3.sp, fontWeight = FontWeight.Bold)
         lines.forEachIndexed { i, l ->
@@ -192,9 +195,9 @@ private fun FormatCard(lines: List<String>) {
                 Text(
                     l,
                     color = if (i == 0) Color.White else Nova.textDim,
-                    fontSize = if (i == 0) 17.sp else 12.sp,
+                    fontSize = if (i == 0) 15.sp else 12.sp,
                     fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
+                    maxLines = if (i == 0) 2 else 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -205,13 +208,13 @@ private fun FormatCard(lines: List<String>) {
 @Composable
 private fun TrackRow(c: TrackRowData, focusRequester: FocusRequester?, onDone: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(10.dp)
     val base = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
     Row(
         base
             .fillMaxWidth()
             .clip(shape)
-            .background(if (focused) Nova.panelHi else Color(0x990E1226))
+            .background(if (focused) Nova.panelHi else Color(0x99111119))
             .border(
                 if (focused) 2.dp else 1.dp,
                 if (focused) Nova.cyan else Color(0x331E2A5A),
@@ -224,7 +227,7 @@ private fun TrackRow(c: TrackRowData, focusRequester: FocusRequester?, onDone: (
                     onDone()
                 }
             }
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -232,14 +235,14 @@ private fun TrackRow(c: TrackRowData, focusRequester: FocusRequester?, onDone: (
             color = if (c.selected) Nova.cyan else Nova.textDim,
             fontSize = 14.sp
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 c.label,
                 color = if (!c.enabled) Nova.textDim else if (focused || c.selected) Color.White else Nova.text,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = if (c.selected) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             if (c.detail.isNotEmpty()) {
@@ -247,7 +250,7 @@ private fun TrackRow(c: TrackRowData, focusRequester: FocusRequester?, onDone: (
                     c.detail,
                     color = Nova.textDim,
                     fontSize = 12.sp,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -266,12 +269,12 @@ private fun AdjustRow(
     onReset: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(10.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(if (focused) Nova.panelHi else Color(0x990E1226))
+            .background(if (focused) Nova.panelHi else Color(0x99111119))
             .border(
                 if (focused) 2.dp else 1.dp,
                 if (focused) Nova.violet else Color(0x331E2A5A),
@@ -301,7 +304,7 @@ private fun AdjustRow(
                 }
             }
             .focusable()
-            .padding(horizontal = 14.dp, vertical = 9.dp)
+            .padding(horizontal = 12.dp, vertical = 5.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -399,28 +402,29 @@ fun ControlBar(
     infoLines: List<Pair<String, String>>?,
     modifier: Modifier = Modifier
 ) {
+    val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
     Box(
         modifier
             .fillMaxWidth()
             .background(
-                Brush.verticalGradient(listOf(Color(0x00050612), Color(0xE6050612), Color(0xF5050612)))
+                Brush.verticalGradient(listOf(Color(0x0008080D), Color(0xE608080D), Color(0xF508080D)))
             )
             .padding(horizontal = 44.dp)
             .padding(top = 54.dp, bottom = 22.dp)
     ) {
         Column {
             if (infoLines != null) {
-                InfoCard(entry, infoLines)
+                InfoCard(entry, infoLines, acc)
                 Spacer(Modifier.height(14.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChannelBadge(ch.iconKey, size = 56.dp)
+                ChannelBadge(ch.iconKey, size = 56.dp, chId = ch.id)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "CH ${"%02d".format(ch.number)}  ·  ${ch.name.uppercase()}",
-                            color = Nova.cyan,
+                            color = acc.c1,
                             fontSize = 12.sp,
                             letterSpacing = 2.sp,
                             maxLines = 1,
@@ -445,7 +449,7 @@ fun ControlBar(
                 if (next != null) {
                     Spacer(Modifier.width(20.dp))
                     Column(Modifier.width(230.dp)) {
-                        Text("UP NEXT · ${fmtTime(next.startMs)}", color = Nova.magenta, fontSize = 11.sp, letterSpacing = 2.sp)
+                        Text("UP NEXT · ${fmtTime(next.startMs)}", color = acc.c2, fontSize = 11.sp, letterSpacing = 2.sp)
                         Text(
                             next.entry.displayTitle,
                             color = Color.White,
@@ -470,7 +474,7 @@ fun ControlBar(
                     Modifier
                         .fillMaxWidth(frac)
                         .fillMaxHeight()
-                        .background(Nova.neon)
+                        .background(acc.brush)
                 )
             }
             Spacer(Modifier.height(5.dp))
@@ -491,7 +495,7 @@ fun ControlBar(
                         Ctl.LIVE -> if (live && !paused) "Live" else "Go Live"
                         else -> c.label
                     }
-                    CtlButton(c, paused, label, i == selected, c == Ctl.LIVE && live && !paused)
+                    CtlButton(c, paused, label, i == selected, c == Ctl.LIVE && live && !paused, acc.c1)
                 }
             }
         }
@@ -534,15 +538,15 @@ private fun StatusChip(live: Boolean, paused: Boolean, transcoded: Boolean) {
 }
 
 @Composable
-private fun CtlButton(ctl: Ctl, paused: Boolean, label: String, focused: Boolean, dim: Boolean) {
+private fun CtlButton(ctl: Ctl, paused: Boolean, label: String, focused: Boolean, dim: Boolean, accent: Color) {
     val shape = RoundedCornerShape(50)
     val fg = if (focused) Color(0xFF0B0F24) else if (dim) Nova.textDim else Color.White
     Row(
         Modifier
-            .shadow(if (focused) 14.dp else 0.dp, shape, ambientColor = Nova.cyan, spotColor = Nova.cyan)
+            .shadow(if (focused) 14.dp else 0.dp, shape, ambientColor = accent, spotColor = accent)
             .clip(shape)
-            .background(if (focused) Color(0xFFEAF0FF) else Color(0xB3151A33))
-            .border(1.dp, if (focused) Nova.cyan else Color(0x332AF5FF), shape)
+            .background(if (focused) tint(Color.White, accent, 0.25f) else Color(0xB3191922))
+            .border(1.dp, if (focused) accent else accent.copy(alpha = 0.3f), shape)
             .padding(horizontal = 13.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -616,14 +620,14 @@ private fun CtlIcon(ctl: Ctl, paused: Boolean, tint: Color) {
 }
 
 @Composable
-private fun InfoCard(entry: MediaEntry, lines: List<Pair<String, String>>) {
+private fun InfoCard(entry: MediaEntry, lines: List<Pair<String, String>>, acc: Accent) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Color(0xD90B0F24))
-            .border(1.dp, Color(0x442AF5FF), shape)
+            .background(Color(0xD90D0D14))
+            .border(1.dp, acc.c1.copy(alpha = 0.5f), shape)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
@@ -643,7 +647,7 @@ private fun InfoCard(entry: MediaEntry, lines: List<Pair<String, String>>) {
         lines.forEach { (k, v) ->
             if (v.isNotEmpty()) {
                 Row {
-                    Text(k, color = Nova.cyan, fontSize = 11.sp, letterSpacing = 2.sp, modifier = Modifier.width(110.dp))
+                    Text(k, color = acc.c1, fontSize = 11.sp, letterSpacing = 2.sp, modifier = Modifier.width(110.dp))
                     Text(v, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 }
             }
@@ -665,18 +669,18 @@ fun SurfPanel(
 ) {
     val n = channels.size
     if (n == 0) return
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
     val rows = Math.min(n, 5)
     val firstOff = -(rows / 2)
 
     Column(
         modifier
-            .width(340.dp)
+            .width(280.dp)
             .clip(shape)
-            .background(Color(0xE60A0E22))
+            .background(Color(0xE60D0D14))
             .border(1.dp, Brush.verticalGradient(listOf(Color(0x802AF5FF), Color(0x80FF5CD6))), shape)
             .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text("CHANNEL SURF", color = Nova.cyan, fontSize = 11.sp, letterSpacing = 3.sp, fontWeight = FontWeight.Bold)
         for (k in 0 until rows) {
@@ -705,11 +709,11 @@ private fun SurfRow(ch: Channel, p: Program?, arrow: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 4.dp),
+            .padding(horizontal = 6.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(arrow, color = Nova.textDim, fontSize = 11.sp, modifier = Modifier.width(18.dp))
-        ChannelBadge(ch.iconKey, size = 38.dp)
+        ChannelBadge(ch.iconKey, size = 38.dp, chId = ch.id)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -735,29 +739,30 @@ private fun SurfRow(ch: Channel, p: Program?, arrow: String) {
 
 @Composable
 private fun SurfSelected(ch: Channel, p: Program?, nowMs: Long, isCurrent: Boolean) {
+    val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
     val shape = RoundedCornerShape(16.dp)
     val next = if (p != null) Scheduler.upcoming(ch, nowMs, 12 * 3_600_000L, 2).getOrNull(1) else null
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Nova.panelHi)
-            .border(2.dp, Nova.neon, shape)
-            .padding(12.dp)
+            .background(tint(Nova.panelHi, acc.c1, 0.22f))
+            .border(2.dp, acc.brush, shape)
+            .padding(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ChannelBadge(ch.iconKey, size = 50.dp)
+            ChannelBadge(ch.iconKey, size = 50.dp, chId = ch.id)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     "${"%02d".format(ch.number)}  ${ch.name}",
-                    style = TextStyle(brush = Nova.neon, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold),
-                    maxLines = 1,
+                    style = TextStyle(brush = acc.brush, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold),
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     if (isCurrent) "WATCHING NOW" else ch.kind.tag,
-                    color = if (isCurrent) Nova.cyan else Nova.textDim,
+                    color = if (isCurrent) acc.c1 else Nova.textDim,
                     fontSize = 10.sp,
                     letterSpacing = 2.sp
                 )
@@ -778,8 +783,8 @@ private fun SurfSelected(ch: Channel, p: Program?, nowMs: Long, isCurrent: Boole
                 Text(sub, color = Nova.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(
-                "${fmtTime(p.startMs)} – ${fmtTime(p.endMs)}",
-                color = Nova.cyan,
+                "${fmtTime(p.startMs)} – ${fmtTime(p.contentEndMs)}",
+                color = acc.c1,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -796,7 +801,7 @@ private fun SurfSelected(ch: Channel, p: Program?, nowMs: Long, isCurrent: Boole
                     Modifier
                         .fillMaxWidth(frac)
                         .fillMaxHeight()
-                        .background(Nova.neon)
+                        .background(acc.brush)
                 )
             }
             if (next != null) {
@@ -823,7 +828,7 @@ fun Pill(text: String, modifier: Modifier = Modifier, accent: Color = Nova.cyan)
     Box(
         modifier
             .clip(shape)
-            .background(Color(0xCC0B0F24))
+            .background(Color(0xCC0D0D14))
             .border(1.dp, accent.copy(alpha = 0.6f), shape)
             .padding(horizontal = 18.dp, vertical = 8.dp)
     ) {
@@ -846,5 +851,52 @@ fun EmptyState(busy: Boolean, status: String, modifier: Modifier = Modifier) {
             color = Nova.textDim,
             fontSize = 15.sp
         )
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Slate: shown instead of the picture between programmes (slotted channels) or when a title can't play
+// ------------------------------------------------------------------------------------------------
+
+@Composable
+fun Slate(
+    ch: Channel,
+    headline: String,
+    title: String,
+    detail: String,
+    isError: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
+    val head = if (isError) Nova.danger else acc.c1
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    listOf(tint(Color(0xFF08080D), acc.c1, 0.16f), Color(0xFF050509))
+                )
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 80.dp)) {
+            ChannelBadge(ch.iconKey, size = 72.dp, chId = ch.id)
+            Spacer(Modifier.height(16.dp))
+            Text(headline, color = head, fontSize = 13.sp, letterSpacing = 4.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                title,
+                color = Color.White,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (detail.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(detail, color = Nova.text, fontSize = 15.sp, textAlign = TextAlign.Center)
+            }
+        }
     }
 }

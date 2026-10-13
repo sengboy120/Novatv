@@ -1,6 +1,11 @@
 package app.novatv.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,10 +34,13 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.novatv.Logos
+import app.novatv.RealChannels
 
 /** A neon line-art icon (see IconData) drawn with a soft glow. */
 @Composable
@@ -67,20 +75,56 @@ fun ChannelIcon(key: String, modifier: Modifier = Modifier, size: Dp = 48.dp, gl
     }
 }
 
-/** Icon inside a rounded dark tile tinted with the icon's own colour. */
+/** Icon inside a rounded dark tile tinted with the icon's own colour (real channels show their name). */
 @Composable
-fun ChannelBadge(key: String, size: Dp = 56.dp, modifier: Modifier = Modifier) {
-    val def = IconData.icons[key] ?: IconData.icons.getValue("network")
+fun ChannelBadge(key: String, size: Dp = 56.dp, modifier: Modifier = Modifier, chId: String? = null) {
+    val acc = remember(key) { accentOf(key) }
     val shape = RoundedCornerShape(size / 4)
+    val rc = if (key.startsWith("rc:")) RealChannels.byKey(key.removePrefix("rc:")) else null
     Box(
         modifier
             .size(size)
             .clip(shape)
-            .background(Color(0xFF0A0E22))
-            .border(1.dp, Color(def.c1).copy(alpha = 0.35f), shape),
+            .background(tint(Color(0xFF0A0A10), acc.c1, 0.16f))
+            .border(1.dp, acc.c1.copy(alpha = 0.5f), shape),
         contentAlignment = Alignment.Center
     ) {
-        ChannelIcon(key, size = size * 0.66f)
+        val ctx = LocalContext.current
+        // 1st choice: a logo the viewer uploaded for this channel (Settings -> CHANNEL LOGOS)
+        val ver = Logos.version.intValue
+        val uploaded = if (chId == null) null else remember(chId, ver) { Logos.get(chId) }
+        // optional: drop logo_<channel>.png (e.g. logo_hbo.png) into res/drawable and it is used instead of the text
+        val logoRes = remember(key) {
+            if (rc == null) 0 else ctx.resources.getIdentifier("logo_" + rc.key, "drawable", ctx.packageName)
+        }
+        if (uploaded != null) {
+            Image(
+                bitmap = uploaded,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(size * 0.12f)
+            )
+        } else if (rc != null && logoRes != 0) {
+            Image(
+                painter = painterResource(logoRes),
+                contentDescription = rc.name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(size * 0.12f)
+            )
+        } else if (rc != null) {
+            val fs = (size.value * (if (rc.badge.length <= 2) 0.36f else if (rc.badge.length == 3) 0.29f else 0.22f)).sp
+            Text(
+                rc.badge,
+                style = TextStyle(brush = acc.brush, fontSize = fs, fontWeight = FontWeight.ExtraBold),
+                maxLines = 1
+            )
+        } else {
+            ChannelIcon(key, size = size * 0.66f)
+        }
     }
 }
 

@@ -28,6 +28,7 @@ data class MediaEntry(
     /** For episodes: "S01E02". Empty for movies. */
     val subtitle: String,
     val series: String,
+    /** Network of an episode; for movies the studios joined with " | ". */
     val network: String,
     val genres: List<String>,
     val year: Int,
@@ -69,13 +70,19 @@ class Channel(
     val name: String,
     val kind: ChannelKind,
     val iconKey: String,
-    val entries: List<MediaEntry>
+    val entries: List<MediaEntry>,
+    /** > 0 for "real" network channels: every programme starts on a multiple of this many ms. */
+    val slotMs: Long = 0L
 ) {
+    /** Airtime reserved for [e]: its length, rounded up to a whole number of slots on slotted channels. */
+    fun spanOf(e: MediaEntry): Long =
+        if (slotMs > 0L) ((e.durationMs + slotMs - 1L) / slotMs).coerceAtLeast(1L) * slotMs else e.durationMs
+
     /** cumulative[i] = end offset (ms) of entry i inside one full cycle of the playlist. */
     val cumulative: LongArray = LongArray(entries.size).also { arr ->
         var t = 0L
         entries.forEachIndexed { i, e ->
-            t += e.durationMs
+            t += spanOf(e)
             arr[i] = t
         }
     }
@@ -87,7 +94,14 @@ data class Program(
     val startMs: Long,
     val endMs: Long
 ) {
-    val durationMs: Long get() = endMs - startMs
+    /** Airtime of the whole slot (what the guide draws). */
+    val spanMs: Long get() = endMs - startMs
+
+    /** Real length of the film / episode (shorter than [spanMs] on slotted channels). */
+    val durationMs: Long get() = if (entry.durationMs in 1L until spanMs) entry.durationMs else spanMs
+
+    /** When the picture itself ends (the rest of the slot, if any, is a "next up" slate). */
+    val contentEndMs: Long get() = startMs + durationMs
 }
 
 data class ChannelSettings(
