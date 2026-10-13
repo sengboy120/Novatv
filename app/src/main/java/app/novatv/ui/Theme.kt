@@ -28,3 +28,14 @@ fun fmtDuration(ms: Long): String {
     val m = ms / 60_000L
     return if (m >= 60) "${m / 60}h ${m % 60}m" else "${m}m"
 }
+
+/** Elapsed / remaining style clock: 4:07 or 1:24:35. */
+fun fmtPos(ms: Long): String {
+    val t = ms.coerceAtLeast(0L) / 1000L
+    val h = t / 3600L
+    val m = (t % 3600L) / 60L
+    val sec = t % 60L
+    return if (h > 0L) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
+fun fmtDate(ms: Long): String = SimpleDateFormat("EEE d/M", Locale.getDefault()).format(Date(ms))

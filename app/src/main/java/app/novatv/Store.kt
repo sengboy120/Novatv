@@ -75,7 +75,8 @@ class Store(context: Context) {
         },
         maxMbps = prefs.getInt("maxMbps", 12),
         subLang = prefs.getString("subLang", "") ?: "",
-        audioLang = prefs.getString("audioLang", "") ?: ""
+        audioLang = prefs.getString("audioLang", "") ?: "",
+        subPos = prefs.getInt("subPos", 8)
     )
 
     fun savePlayback(p: PlaybackSettings) {
@@ -84,6 +85,7 @@ class Store(context: Context) {
             .putInt("maxMbps", p.maxMbps)
             .putString("subLang", p.subLang)
             .putString("audioLang", p.audioLang)
+            .putInt("subPos", p.subPos)
             .apply()
     }
 
@@ -125,7 +127,10 @@ class Store(context: Context) {
                     year = o.getInt("year"),
                     durationMs = o.getLong("durationMs"),
                     thumbUrl = o.getString("thumbUrl"),
-                    streamUrl = o.getString("streamUrl")
+                    streamUrl = o.getString("streamUrl"),
+                    overview = o.optString("overview", ""),
+                    rating = o.optDouble("rating", 0.0).toFloat(),
+                    mpaa = o.optString("mpaa", "")
                 )
             }
         } catch (e: Exception) {
@@ -152,6 +157,9 @@ class Store(context: Context) {
                         .put("durationMs", e.durationMs)
                         .put("thumbUrl", e.thumbUrl)
                         .put("streamUrl", e.streamUrl)
+                        .put("overview", e.overview)
+                        .put("rating", e.rating.toDouble())
+                        .put("mpaa", e.mpaa)
                 )
             }
             cacheFile.writeText(arr.toString())

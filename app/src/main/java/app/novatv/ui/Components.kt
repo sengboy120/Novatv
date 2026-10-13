@@ -91,7 +91,8 @@ fun NeonButton(
     modifier: Modifier = Modifier,
     accent: Color = Nova.cyan,
     selected: Boolean = false,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    compact: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(50)
@@ -114,14 +115,14 @@ fun NeonButton(
             )
             .onFocusChanged { focused = it.isFocused }
             .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 12.dp),
+            .padding(horizontal = if (compact) 16.dp else 22.dp, vertical = if (compact) 6.dp else 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text,
             color = if (focused || selected) Color.White else Nova.text,
             fontWeight = FontWeight.SemiBold,
-            fontSize = 15.sp,
+            fontSize = if (compact) 12.sp else 15.sp,
             letterSpacing = 1.sp
         )
     }

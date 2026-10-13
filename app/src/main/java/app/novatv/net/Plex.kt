@@ -7,6 +7,7 @@ import app.novatv.ServerType
 import app.novatv.StreamInfo
 import app.novatv.StreamsInfo
 import app.novatv.TrackKind
+import app.novatv.VideoInfo
 import okhttp3.FormBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,32 +48,75 @@ object PlexApi {
         return out
     }
 
-    /** Audio + subtitle streams of one item (used for track menus, sidecar subs and transcode picks). */
+    /** Video, audio and subtitle streams of one item (track menus, subtitle files, transcode picks). */
     fun info(s: Server, itemId: String, clientId: String): StreamsInfo {
         val tokenQ = "X-Plex-Token=${Http.enc(s.token)}"
         val root = JSONObject(Http.get("${s.baseUrl}/library/metadata/$itemId", headers(s.token, clientId)))
         val md = root.getJSONObject("MediaContainer").optJSONArray("Metadata").objs().firstOrNull()
-        val part = md?.optJSONArray("Media").objs().firstOrNull()
-            ?.optJSONArray("Part").objs().firstOrNull()
+        val media = md?.optJSONArray("Media").objs().firstOrNull()
+        val part = media?.optJSONArray("Part").objs().firstOrNull()
         val textCodecs = setOf("srt", "subrip", "ass", "ssa", "webvtt", "vtt", "mov_text", "text")
         val audio = ArrayList<StreamInfo>()
         val subs = ArrayList<StreamInfo>()
+        var video: VideoInfo? = null
         for (st in part?.optJSONArray("Stream").objs()) {
             val id = st.optInt("id", -1)
             if (id < 0) continue
             val lang = st.optString("languageCode", "").ifEmpty { st.optString("language", "") }
-            val title = st.optString("displayTitle", "").ifEmpty { st.optString("title", "") }
+            val display = st.optString("displayTitle", "")
+            val extended = st.optString("extendedDisplayTitle", "")
+            val custom = st.optString("title", "")
+            val title = display.ifEmpty { custom }
             val codec = st.optString("codec", "")
             when (st.optInt("streamType", 0)) {
+                1 -> if (video == null) {
+                    var fps = st.optDouble("frameRate", 0.0)
+                    if (fps <= 0.0) fps = parseFrameRate(media?.optString("videoFrameRate", "") ?: "")
+                    val hdrText = display + " " + extended + " " + st.optString("colorSpace", "")
+                    video = VideoInfo(
+                        width = st.optInt("width", media?.optInt("width", 0) ?: 0),
+                        height = st.optInt("height", media?.optInt("height", 0) ?: 0),
+                        fps = fps.toFloat(),
+                        codec = codec,
+                        hdr = Labels.hdr(hdrText, st.optString("colorTrc", ""), st.optBoolean("DOVIPresent", false)),
+                        bitDepth = st.optInt("bitDepth", 0),
+                        bitrateKbps = st.optInt("bitrate", 0)
+                    )
+                }
                 2 -> audio.add(
-                    StreamInfo(id.toString(), TrackKind.AUDIO, lang, title, codec, false, false, "", "")
+                    StreamInfo(
+                        key = id.toString(),
+                        kind = TrackKind.AUDIO,
+                        lang = lang,
+                        title = (display + " " + extended).trim(),
+                        codec = codec,
+                        external = false,
+                        isText = false,
+                        sidecarUrl = "",
+                        mime = "",
+                        customTitle = custom,
+                        profile = st.optString("profile", ""),
+                        channels = st.optInt("channels", 0),
+                        layout = st.optString("audioChannelLayout", ""),
+                        bitrateKbps = st.optInt("bitrate", 0),
+                        forced = st.optBoolean("forced", false),
+                        isDefault = st.optBoolean("default", false),
+                        atmos = display.contains("atmos", true) || extended.contains("atmos", true)
+                    )
                 )
                 3 -> {
                     val key = st.optString("key", "")
+                    val isText = codec.lowercase() in textCodecs
                     val mime = when (codec.lowercase()) {
                         "ass", "ssa" -> "text/x-ssa"
                         "webvtt", "vtt" -> "text/vtt"
                         else -> "application/x-subrip"
+                    }
+                    // external files have a key; embedded text subtitles can usually be pulled as SRT too
+                    val url = when {
+                        key.isNotEmpty() -> "${s.baseUrl}$key" + (if (key.contains('?')) "&" else "?") + tokenQ
+                        isText -> "${s.baseUrl}/library/streams/$id?encoding=utf-8&format=srt&$tokenQ"
+                        else -> ""
                     }
                     subs.add(
                         StreamInfo(
@@ -82,15 +126,34 @@ object PlexApi {
                             title = title,
                             codec = codec,
                             external = key.isNotEmpty(),
-                            isText = codec.lowercase() in textCodecs,
-                            sidecarUrl = if (key.isNotEmpty()) "${s.baseUrl}$key?$tokenQ" else "",
-                            mime = mime
+                            isText = isText,
+                            sidecarUrl = url,
+                            mime = mime,
+                            customTitle = custom,
+                            forced = st.optBoolean("forced", false),
+                            isDefault = st.optBoolean("default", false)
                         )
                     )
                 }
             }
         }
-        return StreamsInfo(itemId, audio, subs)
+        return StreamsInfo(itemId, audio, subs, video)
+    }
+
+    private fun parseFrameRate(raw: String): Double {
+        val r = raw.lowercase().trim()
+        return when {
+            r.isEmpty() -> 0.0
+            r == "ntsc" -> 29.97
+            r == "pal" -> 25.0
+            else -> r.trimEnd('p', 'i').toDoubleOrNull() ?: 0.0
+        }
+    }
+
+    private fun bestRating(m: JSONObject): Float {
+        val a = m.optDouble("audienceRating", 0.0)
+        val r = m.optDouble("rating", 0.0)
+        return (if (a > 0.0) a else r).toFloat()
     }
 
     private fun tags(arr: JSONArray?): List<String> =
@@ -132,7 +195,10 @@ object PlexApi {
                                 year = m.optInt("year", 0),
                                 durationMs = m.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$tokenQ"
+                                streamUrl = "${s.baseUrl}$part?$tokenQ",
+                                overview = m.optString("summary", "").take(420),
+                                rating = bestRating(m),
+                                mpaa = m.optString("contentRating", "")
                             )
                         )
                     }
@@ -165,7 +231,10 @@ object PlexApi {
                                 year = e.optInt("year", 0),
                                 durationMs = e.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$tokenQ"
+                                streamUrl = "${s.baseUrl}$part?$tokenQ",
+                                overview = e.optString("summary", "").take(420),
+                                rating = bestRating(e),
+                                mpaa = e.optString("contentRating", "")
                             )
                         )
                     }

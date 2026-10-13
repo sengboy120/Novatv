@@ -19,6 +19,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # ubuntu-latest already ships the Android SDK (ANDROID_HOME) with licenses accepted,
+      # so no separate setup-android step is needed.
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9

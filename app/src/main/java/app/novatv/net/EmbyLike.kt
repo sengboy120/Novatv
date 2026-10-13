@@ -74,7 +74,7 @@ object EmbyLike {
 
         val out = ArrayList<MediaEntry>()
 
-        for (o in items(s, "Movie", "Genres,RunTimeTicks,ProductionYear")) {
+        for (o in items(s, "Movie", "Genres,RunTimeTicks,ProductionYear,Overview,OfficialRating,CommunityRating")) {
             val id = o.optString("Id")
             if (id.isEmpty()) continue
             out.add(
@@ -91,12 +91,15 @@ object EmbyLike {
                     year = o.optInt("ProductionYear", 0),
                     durationMs = o.optLong("RunTimeTicks", 0L) / 10_000L,
                     thumbUrl = "${s.baseUrl}/Items/$id/Images/Primary?maxHeight=360&api_key=$key",
-                    streamUrl = "${s.baseUrl}/Videos/$id/stream?static=true&api_key=$key"
+                    streamUrl = "${s.baseUrl}/Videos/$id/stream?static=true&api_key=$key",
+                    overview = o.optString("Overview", "").take(420),
+                    rating = o.optDouble("CommunityRating", 0.0).toFloat(),
+                    mpaa = o.optString("OfficialRating", "")
                 )
             )
         }
 
-        for (o in items(s, "Episode", "RunTimeTicks,ProductionYear")) {
+        for (o in items(s, "Episode", "RunTimeTicks,ProductionYear,Overview,OfficialRating,CommunityRating")) {
             val id = o.optString("Id")
             if (id.isEmpty()) continue
             val info = seriesInfo[o.optString("SeriesId")]
@@ -117,7 +120,10 @@ object EmbyLike {
                     year = o.optInt("ProductionYear", 0),
                     durationMs = o.optLong("RunTimeTicks", 0L) / 10_000L,
                     thumbUrl = "${s.baseUrl}/Items/$id/Images/Primary?maxHeight=360&api_key=$key",
-                    streamUrl = "${s.baseUrl}/Videos/$id/stream?static=true&api_key=$key"
+                    streamUrl = "${s.baseUrl}/Videos/$id/stream?static=true&api_key=$key",
+                    overview = o.optString("Overview", "").take(420),
+                    rating = o.optDouble("CommunityRating", 0.0).toFloat(),
+                    mpaa = o.optString("OfficialRating", "")
                 )
             )
         }

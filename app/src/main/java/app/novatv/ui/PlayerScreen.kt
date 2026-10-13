@@ -1,6 +1,5 @@
 package app.novatv.ui
 
-import android.net.Uri
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -11,23 +10,11 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -40,11 +27,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -52,11 +36,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -69,20 +49,23 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import app.novatv.AppViewModel
-import app.novatv.Channel
 import app.novatv.PlayRequest
 import app.novatv.Prepared
 import app.novatv.Scheduler
 import app.novatv.StreamInfo
 import app.novatv.StreamsInfo
 import app.novatv.TrackKind
+import app.novatv.VideoInfo
+import app.novatv.net.Cue
+import app.novatv.net.Http
+import app.novatv.net.Labels
 import app.novatv.net.Langs
 import app.novatv.net.Streams
+import app.novatv.net.SubParser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-
-/** One selectable row in the audio / subtitle menu. */
-private class TrackChoice(val label: String, val selected: Boolean, val onPick: () -> Unit)
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PlayerScreen(vm: AppViewModel) {
@@ -94,14 +77,27 @@ fun PlayerScreen(vm: AppViewModel) {
     val status by vm.status.collectAsState()
     val playback by vm.playback.collectAsState()
 
+    // overlays
     var guideOpen by remember { mutableStateOf(false) }
     var trackMenuOpen by remember { mutableStateOf(false) }
-    var bannerVisible by remember { mutableStateOf(false) }
-    var bannerTick by remember { mutableIntStateOf(0) }
+    var surfOpen by remember { mutableStateOf(false) }
+    var surfIdx by remember { mutableIntStateOf(0) }
+    var infoOpen by remember { mutableStateOf(false) }
+    var controlsVisible by remember { mutableStateOf(false) }
+    var controlsTick by remember { mutableIntStateOf(0) }
+    var ctrlIndex by remember { mutableIntStateOf(0) }
+
+    // playback state
     var playError by remember { mutableStateOf<String?>(null) }
     var playingId by remember { mutableStateOf("") }
     var errorStreak by remember { mutableIntStateOf(0) }
     var guideNow by remember { mutableLongStateOf(vm.now()) }
+    var tickNow by remember { mutableLongStateOf(vm.now()) }
+    var posNow by remember { mutableLongStateOf(0L) }
+    var posBaseMs by remember { mutableLongStateOf(0L) }
+    var live by remember { mutableStateOf(true) }
+    var paused by remember { mutableStateOf(false) }
+    var startOverrideMs by remember { mutableStateOf<Long?>(null) }
 
     // audio / subtitle state
     var curInfo by remember { mutableStateOf<StreamsInfo?>(null) }
@@ -109,6 +105,11 @@ fun PlayerScreen(vm: AppViewModel) {
     var audioKey by remember { mutableStateOf<String?>(null) }
     var subKey by remember { mutableStateOf<String?>(null) }
     var exoTracks by remember { mutableStateOf(Tracks.EMPTY) }
+    var videoFmt by remember { mutableStateOf<Format?>(null) }
+    var cues by remember { mutableStateOf<List<Cue>>(emptyList()) }
+    var ownReady by remember { mutableStateOf(false) }
+    var ownFailed by remember { mutableStateOf(false) }
+    var subDelayMs by remember { mutableLongStateOf(0L) }
     val forceDirect = remember { HashSet<String>() }
 
     val exo = remember { ExoPlayer.Builder(ctx).build() }
@@ -126,8 +127,13 @@ fun PlayerScreen(vm: AppViewModel) {
                 }
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                paused = !playWhenReady
+            }
+
             override fun onTracksChanged(tracks: Tracks) {
                 exoTracks = tracks
+                videoFmt = exo.videoFormat
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -155,16 +161,24 @@ fun PlayerScreen(vm: AppViewModel) {
         }
     }
 
-    // Preferred languages (direct play: ExoPlayer picks the matching embedded / side-loaded track).
-    LaunchedEffect(playback.subLang, playback.audioLang, curTranscoded) {
-        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-            .setPreferredAudioLanguage(if (playback.audioLang.isEmpty()) null else playback.audioLang)
-            .setPreferredTextLanguage(if (playback.subLang.isEmpty()) null else playback.subLang)
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, curTranscoded || playback.subLang.isEmpty())
-            .build()
+    // ---- which subtitle / audio stream is in effect ---------------------------------------------
+    val info = curInfo
+    val effSub: StreamInfo? = if (info == null) {
+        null
+    } else {
+        val sk = subKey
+        val k: String? = when {
+            sk == null -> Streams.pickSub(info, playback.subLang)
+            sk.isEmpty() -> null
+            else -> sk
+        }
+        if (k == null) null else info.subs.firstOrNull { it.key == k }
     }
+    val effAudioKey: String? = if (info == null) null else (audioKey ?: Streams.pickAudio(info, playback.audioLang))
+    val wantOwn = !curTranscoded && effSub != null && effSub.isText && effSub.sidecarUrl.isNotEmpty()
+    val ownActive = wantOwn && ownReady
 
-    // Tune to whatever the schedule says is on air right now.
+    // ---- tune to whatever the schedule says is on air right now ----------------------------------
     LaunchedEffect(currentId, nonce) {
         val ch = vm.currentChannel() ?: return@LaunchedEffect
         val now = vm.now()
@@ -172,10 +186,22 @@ fun PlayerScreen(vm: AppViewModel) {
         if (p.entry.id != playingId) {
             audioKey = null
             subKey = null
+            curInfo = null
+            cues = emptyList()
+            ownReady = false
+            ownFailed = false
+            subDelayMs = 0L
+            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .build()
         }
         playingId = p.entry.id
+        val ovr = startOverrideMs
+        startOverrideMs = null
+        live = ovr == null
         val offset = (now - p.startMs).coerceAtLeast(0L)
-        val startAt = if (offset < 5_000L) 0L else offset
+        val startAt = ovr ?: (if (offset < 5_000L) 0L else offset)
 
         val prep: Prepared = try {
             vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey)
@@ -186,36 +212,95 @@ fun PlayerScreen(vm: AppViewModel) {
         }
         curInfo = prep.info
         curTranscoded = prep.req.transcoded
+        // Plex HLS starts at the requested offset, so the player's own clock begins at 0 there.
+        posBaseMs = if (prep.req.transcoded && prep.req.startMs == 0L) startAt else 0L
 
         val b = MediaItem.Builder().setUri(prep.req.uri)
         val mime = prep.req.mime
         if (mime != null) b.setMimeType(mime)
-        if (prep.req.sidecars.isNotEmpty()) {
-            b.setSubtitleConfigurations(
-                prep.req.sidecars.map { sub ->
-                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(sub.sidecarUrl))
-                        .setMimeType(sub.mime)
-                        .setLanguage(if (sub.lang.isEmpty()) null else sub.lang)
-                        .setLabel(sub.title.ifEmpty { Langs.display(sub.lang) })
-                        .build()
-                }
-            )
-        }
         exo.setMediaItem(b.build(), prep.req.startMs)
         exo.prepare()
         exo.playWhenReady = true
-        bannerTick += 1
+        controlsTick += 1
 
-        // when this program is scheduled to end, tune again (-> next program)
+        // when this program is scheduled to end, tune again (-> next program), unless the viewer
+        // has paused / restarted and is watching time-shifted
         delay((p.endMs - vm.now()).coerceAtLeast(500L))
-        vm.retune()
+        if (live) vm.retune()
     }
 
-    LaunchedEffect(bannerTick) {
-        if (bannerTick > 0) {
-            bannerVisible = true
-            delay(6_000L)
-            bannerVisible = false
+    // ---- text subtitles: fetch + parse so we can draw (and shift) them ---------------------------
+    LaunchedEffect(playingId, curInfo, effSub?.key, curTranscoded) {
+        cues = emptyList()
+        ownReady = false
+        ownFailed = false
+        val st = effSub
+        if (curTranscoded || st == null || !st.isText || st.sidecarUrl.isEmpty()) return@LaunchedEffect
+        val loaded: List<Cue> = withContext(Dispatchers.IO) {
+            try {
+                SubParser.parse(Http.get(st.sidecarUrl))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        if (loaded.isEmpty()) {
+            ownFailed = true
+            if (st.external) playError = "Couldn't load this subtitle file"
+        } else {
+            cues = loaded
+            ownReady = true
+        }
+    }
+
+    // ---- apply language / track choices to ExoPlayer ----------------------------------------------
+    LaunchedEffect(
+        exoTracks, curInfo, effSub?.key, effAudioKey, ownReady, ownFailed, curTranscoded,
+        playback.subLang, playback.audioLang, audioKey
+    ) {
+        val inf = curInfo
+        val b = exo.trackSelectionParameters.buildUpon()
+            .setPreferredAudioLanguage(if (playback.audioLang.isEmpty()) null else playback.audioLang)
+            .setPreferredTextLanguage(if (playback.subLang.isEmpty()) null else playback.subLang)
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+        var textOff = true
+        if (!curTranscoded) {
+            val st = effSub
+            if (inf == null) {
+                // no server details: let ExoPlayer pick by preferred language
+                textOff = playback.subLang.isEmpty()
+            } else if (st != null) {
+                val ownWanted = st.isText && st.sidecarUrl.isNotEmpty()
+                val useNative = if (ownWanted) ownFailed && !st.external else !st.external
+                if (useNative) {
+                    val groups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                    val g = mapGroup(inf.subs.filter { !it.external }, st, groups)
+                    if (g != null) {
+                        textOff = false
+                        b.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0))
+                    }
+                }
+            }
+            val ak = audioKey
+            if (ak != null && inf != null) {
+                val st = inf.audio.firstOrNull { it.key == ak }
+                val groups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                val g = if (st != null) mapGroup(inf.audio, st, groups) else null
+                if (g != null) b.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0))
+            }
+        }
+        b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, textOff)
+        val np = b.build()
+        if (np != exo.trackSelectionParameters) exo.trackSelectionParameters = np
+    }
+
+    // ---- small timers --------------------------------------------------------------------------
+    LaunchedEffect(controlsTick) {
+        if (controlsTick > 0) {
+            controlsVisible = true
+            delay(7_000L)
+            controlsVisible = false
         }
     }
     LaunchedEffect(playError) {
@@ -231,6 +316,19 @@ fun PlayerScreen(vm: AppViewModel) {
         }
     }
 
+    val barWanted = controlsVisible || paused || infoOpen
+    val ch = channels.firstOrNull { it.id == currentId }
+    val overlayOpen = guideOpen || trackMenuOpen || surfOpen
+    val barShown = barWanted && !overlayOpen && ch != null
+
+    LaunchedEffect(barShown, surfOpen) {
+        while (barShown || surfOpen) {
+            tickNow = vm.now()
+            posNow = exo.currentPosition
+            delay(500L)
+        }
+    }
+
     val rootFocus = remember { FocusRequester() }
     LaunchedEffect(guideOpen, trackMenuOpen) {
         if (!guideOpen && !trackMenuOpen) {
@@ -242,93 +340,340 @@ fun PlayerScreen(vm: AppViewModel) {
             }
         }
     }
-    BackHandler(enabled = guideOpen || trackMenuOpen) {
-        if (trackMenuOpen) trackMenuOpen = false else guideOpen = false
+
+    // ---- actions ---------------------------------------------------------------------------------
+    fun togglePause() {
+        if (exo.playWhenReady) {
+            exo.playWhenReady = false
+            live = false
+        } else {
+            exo.playWhenReady = true
+        }
     }
 
-    // ---- audio / subtitle menu content --------------------------------------------------------
-    val subChoices = ArrayList<TrackChoice>()
-    val audioChoices = ArrayList<TrackChoice>()
-    if (trackMenuOpen) {
+    fun restart() {
+        live = false
         if (!curTranscoded) {
-            // direct play: ExoPlayer knows the embedded tracks (and any side-loaded subtitle files)
-            val textGroups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
-            val audioGroups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO && it.isSupported }
-            subChoices.add(
-                TrackChoice("Off", textGroups.none { it.isSelected }) {
-                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                        .build()
-                    vm.rememberLang(TrackKind.SUBTITLE, "")
+            exo.seekTo(0L)
+            exo.playWhenReady = true
+        } else {
+            startOverrideMs = 0L
+            vm.retune()
+        }
+    }
+
+    fun goLive() {
+        val c = vm.currentChannel() ?: return
+        val p = Scheduler.programAt(c, vm.now()) ?: return
+        if (!curTranscoded && p.entry.id == playingId) {
+            exo.seekTo((vm.now() - p.startMs).coerceAtLeast(0L))
+            exo.playWhenReady = true
+            live = true
+        } else {
+            vm.retune()
+        }
+    }
+
+    fun seekBy(deltaMs: Long) {
+        if (curTranscoded) return
+        var t = exo.currentPosition + deltaMs
+        val d = exo.duration
+        if (d != C.TIME_UNSET) t = t.coerceAtMost(d - 1_000L)
+        exo.seekTo(t.coerceAtLeast(0L))
+        live = false
+        controlsTick += 1
+    }
+
+    fun openSurf() {
+        surfIdx = channels.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+        controlsVisible = false
+        infoOpen = false
+        surfOpen = true
+    }
+
+    fun activate(i: Int) {
+        controlsTick += 1
+        when (Ctl.values()[i]) {
+            Ctl.PLAY_PAUSE -> togglePause()
+            Ctl.RESTART -> restart()
+            Ctl.LIVE -> goLive()
+            Ctl.GUIDE -> guideOpen = true
+            Ctl.SURF -> openSurf()
+            Ctl.TRACKS -> trackMenuOpen = true
+            Ctl.INFO -> infoOpen = !infoOpen
+        }
+    }
+
+    fun handleKey(key: Key): Boolean {
+        if (channels.isEmpty()) {
+            if (key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter || key == Key.Menu) {
+                vm.openSettings()
+                return true
+            }
+            return false
+        }
+        val last = Ctl.values().size - 1
+        return when (key) {
+            Key.DirectionUp, Key.ChannelUp -> {
+                vm.channelStep(1)
+                true
+            }
+            Key.DirectionDown, Key.ChannelDown -> {
+                vm.channelStep(-1)
+                true
+            }
+            Key.DirectionLeft -> {
+                if (barWanted) {
+                    ctrlIndex = (ctrlIndex - 1).coerceAtLeast(0)
+                    controlsTick += 1
+                } else {
+                    guideOpen = true
                 }
-            )
+                true
+            }
+            Key.DirectionRight -> {
+                if (barWanted) {
+                    ctrlIndex = (ctrlIndex + 1).coerceAtMost(last)
+                    controlsTick += 1
+                } else {
+                    trackMenuOpen = true
+                }
+                true
+            }
+            Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                if (barWanted) {
+                    activate(ctrlIndex)
+                } else {
+                    ctrlIndex = 0
+                    controlsTick += 1
+                }
+                true
+            }
+            Key.Menu -> {
+                guideOpen = true
+                true
+            }
+            Key.Captions -> {
+                trackMenuOpen = true
+                true
+            }
+            Key.Info -> {
+                if (infoOpen) infoOpen = false else {
+                    infoOpen = true
+                    controlsTick += 1
+                }
+                true
+            }
+            Key.MediaPlayPause, Key.Spacebar -> {
+                togglePause()
+                controlsTick += 1
+                true
+            }
+            Key.MediaPlay -> {
+                exo.playWhenReady = true
+                true
+            }
+            Key.MediaPause -> {
+                if (exo.playWhenReady) togglePause()
+                controlsTick += 1
+                true
+            }
+            Key.MediaFastForward -> {
+                seekBy(30_000L)
+                true
+            }
+            Key.MediaRewind -> {
+                seekBy(-30_000L)
+                true
+            }
+            else -> false
+        }
+    }
+
+    fun handleSurfKey(key: Key): Boolean {
+        val n = channels.size
+        if (n == 0) return false
+        return when (key) {
+            Key.DirectionUp, Key.ChannelUp -> {
+                surfIdx = Math.floorMod(surfIdx - 1, n)
+                true
+            }
+            Key.DirectionDown, Key.ChannelDown -> {
+                surfIdx = Math.floorMod(surfIdx + 1, n)
+                true
+            }
+            Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                vm.tune(channels[surfIdx.coerceIn(0, n - 1)].id)
+                surfOpen = false
+                true
+            }
+            Key.DirectionLeft, Key.DirectionRight -> true
+            else -> false
+        }
+    }
+
+    BackHandler(enabled = guideOpen || trackMenuOpen || surfOpen || infoOpen || controlsVisible || paused) {
+        when {
+            trackMenuOpen -> trackMenuOpen = false
+            surfOpen -> surfOpen = false
+            guideOpen -> guideOpen = false
+            infoOpen -> infoOpen = false
+            controlsVisible -> controlsVisible = false
+            paused -> exo.playWhenReady = true
+        }
+    }
+
+    // ---- audio / subtitle menu content --------------------------------------------------------------
+    val subRows = ArrayList<TrackRowData>()
+    val audioRows = ArrayList<TrackRowData>()
+    val formatLines = ArrayList<String>()
+    val vInfo: VideoInfo? = info?.video ?: exoVideo(videoFmt)
+    val audioGroups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+
+    if (trackMenuOpen) {
+        if (vInfo != null) {
+            formatLines.add(Labels.videoLine(vInfo))
+            val d = Labels.videoDetail(vInfo)
+            if (d.isNotEmpty()) formatLines.add(d)
+        }
+        formatLines.add(if (curTranscoded) "Server transcode  ·  up to ${playback.maxMbps} Mbps" else "Direct play")
+
+        val subOff = if (info == null) playback.subLang.isEmpty() else effSub == null
+        subRows.add(
+            TrackRowData("Off", "", subOff) {
+                subKey = ""
+                vm.rememberLang(TrackKind.SUBTITLE, "")
+                if (curTranscoded) vm.retune()
+            }
+        )
+        if (info != null) {
+            for (st in info.subs) {
+                val usable = curTranscoded || (st.isText && st.sidecarUrl.isNotEmpty()) || !st.external
+                subRows.add(
+                    TrackRowData(
+                        Labels.subLabel(st),
+                        Labels.subDetail(st),
+                        effSub?.key == st.key,
+                        usable
+                    ) {
+                        subKey = st.key
+                        val c = Langs.canon(st.lang)
+                        if (c.isNotEmpty()) vm.rememberLang(TrackKind.SUBTITLE, c)
+                        if (curTranscoded) vm.retune()
+                    }
+                )
+            }
+            info.audio.forEachIndexed { i, st ->
+                val g = if (curTranscoded) null else mapGroup(info.audio, st, audioGroups)
+                val supported = g?.isSupported ?: true
+                val selected = if (curTranscoded) {
+                    if (effAudioKey != null) effAudioKey == st.key else i == 0
+                } else {
+                    g?.isSelected ?: false
+                }
+                val detail = Labels.audioDetail(st) +
+                    (if (!supported) (if (Labels.audioDetail(st).isEmpty()) "" else "  ·  ") + "Not supported on this device" else "")
+                audioRows.add(
+                    TrackRowData(Labels.audioLabel(st), detail, selected, supported) {
+                        audioKey = st.key
+                        val c = Langs.canon(st.lang)
+                        if (c.isNotEmpty()) vm.rememberLang(TrackKind.AUDIO, c)
+                        if (curTranscoded) vm.retune()
+                    }
+                )
+            }
+        } else if (!curTranscoded) {
+            // the server gave us no stream details: describe what ExoPlayer found in the file
+            val textGroups = exoTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
             textGroups.forEachIndexed { i, g ->
                 val f = g.getTrackFormat(0)
-                subChoices.add(
-                    TrackChoice(trackLabel(f, i, false), g.isSelected) {
-                        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0))
-                            .build()
+                val lang = Langs.display(f.language).ifEmpty { f.label ?: "Track ${i + 1}" }
+                val fmt = subMimeName(f.sampleMimeType)
+                subRows.add(
+                    TrackRowData(if (fmt.isEmpty()) lang else "$lang ($fmt)", "", g.isSelected) {
                         val c = Langs.canon(f.language)
                         if (c.isNotEmpty()) vm.rememberLang(TrackKind.SUBTITLE, c)
                     }
                 )
             }
-            audioGroups.forEachIndexed { i, g ->
+            audioGroups.filter { it.isSupported }.forEachIndexed { i, g ->
                 val f = g.getTrackFormat(0)
-                audioChoices.add(
-                    TrackChoice(trackLabel(f, i, true), g.isSelected) {
-                        exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, 0))
-                            .build()
+                val lang = Langs.display(f.language).ifEmpty { f.label ?: "Track ${i + 1}" }
+                val tech = listOf(
+                    Labels.mimeToAudio(f.sampleMimeType, f.codecs),
+                    Labels.layout(if (f.channelCount > 0) f.channelCount else 0, "")
+                ).filter { it.isNotEmpty() }.joinToString(" ")
+                audioRows.add(
+                    TrackRowData(if (tech.isEmpty()) lang else "$lang  ·  $tech", "", g.isSelected) {
                         val c = Langs.canon(f.language)
                         if (c.isNotEmpty()) vm.rememberLang(TrackKind.AUDIO, c)
                     }
                 )
             }
-        } else {
-            // server transcode: the menu comes from the server's stream list; a change restarts the stream
-            val info = curInfo
-            val sk = subKey
-            val ak = audioKey
-            val effSub: String? = when {
-                sk == null -> Streams.pickSub(info, playback.subLang)
-                sk.isEmpty() -> null
-                else -> sk
-            }
-            val effAudio: String? = ak ?: Streams.pickAudio(info, playback.audioLang)
-            subChoices.add(
-                TrackChoice("Off", effSub == null) {
-                    subKey = ""
-                    vm.rememberLang(TrackKind.SUBTITLE, "")
-                    vm.retune()
-                }
-            )
-            if (info != null) {
-                for (st in info.subs) {
-                    subChoices.add(
-                        TrackChoice(streamLabel(st), effSub == st.key) {
-                            subKey = st.key
-                            val c = Langs.canon(st.lang)
-                            if (c.isNotEmpty()) vm.rememberLang(TrackKind.SUBTITLE, c)
-                            vm.retune()
-                        }
-                    )
-                }
-                info.audio.forEachIndexed { i, st ->
-                    val sel = if (effAudio != null) effAudio == st.key else i == 0
-                    audioChoices.add(
-                        TrackChoice(streamLabel(st), sel) {
-                            audioKey = st.key
-                            val c = Langs.canon(st.lang)
-                            if (c.isNotEmpty()) vm.rememberLang(TrackKind.AUDIO, c)
-                            vm.retune()
-                        }
-                    )
-                }
-            }
         }
+    }
+
+    val nativeTextFallback = !curTranscoded && effSub != null && effSub.isText && ownFailed
+    val loadingSub = wantOwn && !ownReady && !ownFailed
+    val adjustNote = when {
+        curTranscoded -> "Subtitles are burned into the video by the server, so position and delay can't be changed."
+        effSub == null -> "Select a subtitle to adjust its position and delay."
+        loadingSub -> "Loading subtitle…"
+        ownActive -> "Position and delay apply to this text subtitle."
+        nativeTextFallback -> "Delay isn't available for this subtitle (position only)."
+        else -> "Image subtitles (PGS / VobSub) can't be moved or delayed. Pick an SRT / text track for that."
+    }
+    val adjust = AdjustState(
+        posPct = playback.subPos,
+        posEnabled = ownActive || nativeTextFallback,
+        onPos = { dir, fast ->
+            val step = if (fast) 3 else 1
+            vm.updatePlayback(playback.copy(subPos = (playback.subPos + dir * step).coerceIn(0, 50)))
+        },
+        onPosReset = { vm.updatePlayback(playback.copy(subPos = 8)) },
+        delayMs = subDelayMs,
+        delayEnabled = ownActive,
+        onDelay = { dir, fast ->
+            val step = if (fast) 500L else 100L
+            subDelayMs = (subDelayMs + dir * step).coerceIn(-60_000L, 60_000L)
+        },
+        onDelayReset = { subDelayMs = 0L },
+        note = adjustNote
+    )
+
+    // ---- info panel + control bar data ------------------------------------------------------------------
+    val entry = ch?.entries?.firstOrNull { it.id == playingId }
+    val infoLines: List<Pair<String, String>>? = if (infoOpen && entry != null) {
+        val lines = ArrayList<Pair<String, String>>()
+        if (vInfo != null) {
+            lines.add(Pair("VIDEO", Labels.videoLine(vInfo)))
+            lines.add(Pair("", ""))
+            val d = Labels.videoDetail(vInfo)
+            if (d.isNotEmpty()) lines[lines.size - 1] = Pair("CODEC", d)
+        }
+        val selAudio: StreamInfo? = if (info == null) {
+            null
+        } else {
+            info.audio.firstOrNull { st ->
+                !curTranscoded && mapGroup(info.audio, st, audioGroups)?.isSelected == true
+            } ?: info.audio.firstOrNull { it.key == effAudioKey } ?: info.audio.firstOrNull()
+        }
+        lines.add(Pair("AUDIO", if (selAudio != null) Labels.audioLabel(selAudio) else ""))
+        lines.add(
+            Pair(
+                "SUBTITLES",
+                if (effSub != null) Labels.subLabel(effSub) + (if (curTranscoded) "  ·  burned in" else "") else "Off"
+            )
+        )
+        lines.add(
+            Pair(
+                "PLAYBACK",
+                if (curTranscoded) "Server transcode  ·  up to ${playback.maxMbps} Mbps" else "Direct play"
+            )
+        )
+        lines
+    } else {
+        null
     }
 
     Box(
@@ -337,32 +682,14 @@ fun PlayerScreen(vm: AppViewModel) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { ev ->
-                if (guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown || ev.nativeKeyEvent.repeatCount > 0) {
+                if (guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown) {
+                    false
+                } else if (surfOpen) {
+                    handleSurfKey(ev.key)
+                } else if (ev.nativeKeyEvent.repeatCount > 0) {
                     false
                 } else {
-                    when (ev.key) {
-                        Key.DirectionUp, Key.ChannelUp -> {
-                            vm.channelStep(1)
-                            true
-                        }
-                        Key.DirectionDown, Key.ChannelDown -> {
-                            vm.channelStep(-1)
-                            true
-                        }
-                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Menu, Key.DirectionLeft -> {
-                            if (channels.isEmpty()) vm.openSettings() else guideOpen = true
-                            true
-                        }
-                        Key.DirectionRight, Key.Captions -> {
-                            if (channels.isNotEmpty()) trackMenuOpen = true
-                            true
-                        }
-                        Key.Info -> {
-                            bannerTick += 1
-                            true
-                        }
-                        else -> false
-                    }
+                    handleKey(ev.key)
                 }
             }
             .focusable()
@@ -387,24 +714,61 @@ fun PlayerScreen(vm: AppViewModel) {
                         )
                     )
                     subtitleView?.setFractionalTextSize(0.06f)
-                    subtitleView?.setBottomPaddingFraction(0.08f)
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            update = { view ->
+                view.subtitleView?.setBottomPaddingFraction(playback.subPos.coerceIn(0, 60) / 100f)
+            },
+            // full screen normally; shrinks into the guide's preview window while the guide is open
+            modifier = if (guideOpen) {
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = GuideMetrics.previewTop, end = GuideMetrics.previewEnd)
+                    .size(GuideMetrics.previewW, GuideMetrics.previewH)
+            } else {
+                Modifier.fillMaxSize()
+            }
         )
 
         if (channels.isEmpty()) {
             EmptyState(busy, status, Modifier.align(Alignment.Center))
         }
 
-        val ch = channels.firstOrNull { it.id == currentId }
+        if (ownActive && !guideOpen) {
+            SubtitleOverlay(cues, subDelayMs, playback.subPos, { exo.currentPosition })
+        }
+
+        // ---- control bar (Pause / Restart / Go Live / Guide / Channel Surf / Audio & Subs / Info) ----
         AnimatedVisibility(
-            visible = bannerVisible && !guideOpen && !trackMenuOpen && ch != null,
+            visible = barShown && entry != null,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn() + slideInVertically { it / 3 },
             exit = fadeOut() + slideOutVertically { it / 3 }
         ) {
-            if (ch != null) NowBanner(ch, curTranscoded) { vm.now() }
+            if (ch != null && entry != null) {
+                val liveProg = Scheduler.programAt(ch, tickNow)
+                val total = entry.durationMs
+                val elapsed = if (live && liveProg != null && liveProg.entry.id == entry.id) {
+                    tickNow - liveProg.startMs
+                } else {
+                    posBaseMs + posNow
+                }
+                val endClock = tickNow + (total - elapsed).coerceAtLeast(0L)
+                val next = Scheduler.upcoming(ch, tickNow, 12 * 3_600_000L, 2).getOrNull(1)
+                ControlBar(
+                    ch = ch,
+                    entry = entry,
+                    next = next,
+                    live = live,
+                    paused = paused,
+                    transcoded = curTranscoded,
+                    selected = ctrlIndex,
+                    elapsedMs = elapsed.coerceAtLeast(0L),
+                    totalMs = total,
+                    endClockMs = endClock,
+                    infoLines = infoLines
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -429,15 +793,28 @@ fun PlayerScreen(vm: AppViewModel) {
         }
 
         AnimatedVisibility(
+            visible = surfOpen,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 28.dp),
+            enter = fadeIn() + slideInHorizontally { it / 2 },
+            exit = fadeOut() + slideOutHorizontally { it / 2 }
+        ) {
+            SurfPanel(channels, surfIdx, tickNow, currentId)
+        }
+
+        AnimatedVisibility(
             visible = trackMenuOpen,
             modifier = Modifier.align(Alignment.CenterEnd),
             enter = fadeIn() + slideInHorizontally { it / 2 },
             exit = fadeOut() + slideOutHorizontally { it / 2 }
         ) {
             TrackMenu(
-                subs = subChoices,
-                audio = audioChoices,
+                formatLines = formatLines,
+                subs = subRows,
+                audio = audioRows,
                 transcoded = curTranscoded,
+                adjust = adjust,
                 onClose = { trackMenuOpen = false }
             )
         }
@@ -452,250 +829,49 @@ fun PlayerScreen(vm: AppViewModel) {
     }
 }
 
-private fun trackLabel(f: Format, idx: Int, audio: Boolean): String {
-    val own = f.label
-    val base = if (!own.isNullOrBlank()) own else Langs.display(f.language).ifEmpty { "Track ${idx + 1}" }
-    if (!audio) return base
-    val ch = when (f.channelCount) {
-        1 -> "mono"
-        2 -> "stereo"
-        6 -> "5.1"
-        8 -> "7.1"
-        else -> ""
-    }
-    return if (ch.isEmpty()) base else "$base · $ch"
+/**
+ * Finds the ExoPlayer track group that belongs to server stream [st]. Positions match when the file
+ * and the server list the same number of streams; otherwise we match by language and occurrence.
+ */
+private fun mapGroup(all: List<StreamInfo>, st: StreamInfo, groups: List<Tracks.Group>): Tracks.Group? {
+    val pos = all.indexOfFirst { it.key == st.key }
+    if (pos < 0 || groups.isEmpty()) return null
+    if (groups.size == all.size) return groups[pos]
+    val lang = Langs.canon(st.lang)
+    val nth = all.take(pos).count { Langs.canon(it.lang) == lang }
+    val same = groups.filter { Langs.canon(it.getTrackFormat(0).language) == lang }
+    return same.getOrNull(nth)
 }
 
-private fun streamLabel(st: StreamInfo): String {
-    val t = st.title
-    if (t.isNotEmpty()) return t
-    val l = Langs.display(st.lang)
-    return if (l.isNotEmpty()) l else "Track ${st.key}"
+/** Video details read from the decoder, used when the server gave none. */
+private fun exoVideo(f: Format?): VideoInfo? {
+    if (f == null || f.width <= 0) return null
+    val mime = f.sampleMimeType ?: ""
+    val transfer = f.colorInfo?.colorTransfer
+    val hdr = when {
+        mime.contains("dolby-vision") -> "Dolby Vision"
+        transfer == C.COLOR_TRANSFER_ST2084 -> "HDR10"
+        transfer == C.COLOR_TRANSFER_HLG -> "HLG"
+        else -> "SDR"
+    }
+    return VideoInfo(
+        width = f.width,
+        height = f.height,
+        fps = if (f.frameRate > 0f) f.frameRate else 0f,
+        codec = mime.substringAfter('/'),
+        hdr = hdr,
+        bitDepth = 0,
+        bitrateKbps = if (f.bitrate > 0) f.bitrate / 1000 else 0
+    )
 }
 
-@Composable
-private fun TrackMenu(
-    subs: List<TrackChoice>,
-    audio: List<TrackChoice>,
-    transcoded: Boolean,
-    onClose: () -> Unit
-) {
-    val first = remember { FocusRequester() }
-    val startIdx = subs.indexOfFirst { it.selected }.coerceAtLeast(0)
-    LaunchedEffect(Unit) {
-        delay(100L)
-        try {
-            first.requestFocus()
-        } catch (e: Exception) {
-            // ignore
-        }
-    }
-    Box(
-        Modifier
-            .fillMaxHeight()
-            .width(440.dp)
-            .background(Brush.horizontalGradient(listOf(Color(0x00060814), Color(0xF2080A1E), Color(0xFA0B0720))))
-    ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(start = 56.dp, end = 32.dp, top = 36.dp, bottom = 36.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                "AUDIO & SUBTITLES",
-                style = TextStyle(brush = Nova.neon, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 4.sp)
-            )
-            if (transcoded) {
-                Text(
-                    "Server transcode · changing a track restarts the stream",
-                    color = Nova.textDim,
-                    fontSize = 12.sp
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text("SUBTITLES", color = Nova.cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-            subs.forEachIndexed { i, c ->
-                TrackRow(c, if (i == startIdx) first else null, onClose)
-            }
-            Spacer(Modifier.height(10.dp))
-            Text("AUDIO", color = Nova.magenta, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-            if (audio.isEmpty()) {
-                Text("No other audio tracks", color = Nova.textDim, fontSize = 14.sp)
-            }
-            audio.forEach { c -> TrackRow(c, null, onClose) }
-        }
-    }
-}
-
-@Composable
-private fun TrackRow(c: TrackChoice, focusRequester: FocusRequester?, onDone: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
-    val base = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
-    Row(
-        base
-            .fillMaxWidth()
-            .clip(shape)
-            .background(if (focused) Nova.panelHi else Color(0x990E1226))
-            .border(
-                if (focused) 2.dp else 1.dp,
-                if (focused) Nova.cyan else Color(0x331E2A5A),
-                shape
-            )
-            .onFocusChanged { focused = it.isFocused }
-            .clickable {
-                c.onPick()
-                onDone()
-            }
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            if (c.selected) "●" else "○",
-            color = if (c.selected) Nova.cyan else Nova.textDim,
-            fontSize = 14.sp
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            c.label,
-            color = if (focused || c.selected) Color.White else Nova.text,
-            fontSize = 16.sp,
-            fontWeight = if (c.selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun Pill(text: String, modifier: Modifier = Modifier, accent: Color = Nova.cyan) {
-    val shape = RoundedCornerShape(50)
-    Box(
-        modifier
-            .clip(shape)
-            .background(Color(0xCC0B0F24))
-            .border(1.dp, accent.copy(alpha = 0.6f), shape)
-            .padding(horizontal = 18.dp, vertical = 8.dp)
-    ) {
-        Text(text, color = accent, fontSize = 13.sp, letterSpacing = 1.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun EmptyState(busy: Boolean, status: String, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        ChannelIcon("tv", size = 96.dp)
-        Spacer(Modifier.height(20.dp))
-        Text(
-            if (busy) "TUNING IN YOUR LIBRARY…" else "NO CHANNELS YET",
-            style = TextStyle(brush = Nova.neon, fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            if (status.isNotEmpty()) status else "Press OK to open Settings and connect Plex, Jellyfin or Emby",
-            color = Nova.textDim,
-            fontSize = 15.sp
-        )
-    }
-}
-
-@Composable
-private fun NowBanner(ch: Channel, transcoded: Boolean, getNow: () -> Long) {
-    var now by remember { mutableLongStateOf(getNow()) }
-    LaunchedEffect(ch.id) {
-        while (true) {
-            now = getNow()
-            delay(1_000L)
-        }
-    }
-    val program = Scheduler.programAt(ch, now) ?: return
-    val next = Scheduler.upcoming(ch, now, 12 * 3_600_000L, 2).getOrNull(1)
-    val e = program.entry
-    val shape = RoundedCornerShape(24.dp)
-
-    Column(Modifier.padding(horizontal = 48.dp, vertical = 30.dp)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .background(Brush.horizontalGradient(listOf(Color(0xE60A0E22), Color(0xE6150A2E))))
-                .border(1.dp, Brush.horizontalGradient(listOf(Color(0x802AF5FF), Color(0x80FF5CD6))), shape)
-                .padding(horizontal = 24.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "%02d".format(ch.number),
-                style = TextStyle(brush = Nova.neon, fontSize = 56.sp, fontWeight = FontWeight.ExtraBold)
-            )
-            Spacer(Modifier.width(18.dp))
-            ChannelBadge(ch.iconKey, size = 68.dp)
-            Spacer(Modifier.width(22.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "${ch.name.uppercase()}  ·  ${ch.kind.tag}" + (if (transcoded) "  ·  SERVER TRANSCODE" else ""),
-                    color = Nova.cyan,
-                    fontSize = 13.sp,
-                    letterSpacing = 3.sp
-                )
-                Text(
-                    e.displayTitle,
-                    color = Color.White,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val sub = e.displaySub
-                if (sub.isNotEmpty()) {
-                    Text(sub, color = Nova.text, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Spacer(Modifier.height(10.dp))
-                val frac = ((now - program.startMs).toFloat() / program.durationMs.toFloat()).coerceIn(0f, 1f)
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(5.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0x33FFFFFF))
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(frac)
-                            .fillMaxHeight()
-                            .background(Nova.neon)
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "${fmtTime(program.startMs)} – ${fmtTime(program.endMs)}  ·  ${fmtDuration((program.endMs - now).coerceAtLeast(0L))} left",
-                    color = Nova.textDim,
-                    fontSize = 13.sp
-                )
-            }
-            if (next != null) {
-                Spacer(Modifier.width(24.dp))
-                Column(Modifier.width(240.dp)) {
-                    Text("UP NEXT · ${fmtTime(next.startMs)}", color = Nova.magenta, fontSize = 12.sp, letterSpacing = 2.sp)
-                    Text(
-                        next.entry.displayTitle,
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "▲▼ CHANNEL      ◀ GUIDE      ▶ AUDIO & SUBTITLES",
-            color = Nova.textDim,
-            fontSize = 12.sp,
-            letterSpacing = 3.sp,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-    }
+private fun subMimeName(mime: String?): String = when ((mime ?: "").lowercase()) {
+    "application/pgs" -> "PGS"
+    "application/x-subrip" -> "SRT"
+    "text/vtt" -> "VTT"
+    "text/x-ssa" -> "ASS"
+    "application/dvbsubs" -> "DVB"
+    "application/vobsub" -> "VobSub"
+    "application/x-quicktime-tx3g" -> "TX3G"
+    else -> ""
 }

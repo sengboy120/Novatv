@@ -33,7 +33,13 @@ data class MediaEntry(
     val year: Int,
     val durationMs: Long,
     val thumbUrl: String,
-    val streamUrl: String
+    val streamUrl: String,
+    /** Plot summary (may be empty; filled in on library sync). */
+    val overview: String = "",
+    /** Community / audience rating 0-10, 0 = unknown. */
+    val rating: Float = 0f,
+    /** Content rating such as "PG-13" or "TV-MA". */
+    val mpaa: String = ""
 ) {
     /** Title as shown on screen. */
     val displayTitle: String
@@ -107,7 +113,9 @@ data class PlaybackSettings(
     /** 2-letter code ("th", "en", ...) or "" = no subtitles. */
     val subLang: String = "",
     /** 2-letter code or "" = use the file's default audio track. */
-    val audioLang: String = ""
+    val audioLang: String = "",
+    /** Subtitle height: percent of the screen height between the bottom edge and the text. */
+    val subPos: Int = 8
 )
 
 enum class TrackKind { AUDIO, SUBTITLE }
@@ -123,13 +131,38 @@ data class StreamInfo(
     val external: Boolean,
     val isText: Boolean,
     val sidecarUrl: String,
-    val mime: String
+    val mime: String,
+    /** The stream's own title tag (e.g. "Commentary"), without any language / codec text. */
+    val customTitle: String = "",
+    /** Codec profile as reported by the server, e.g. "DTS-HD MA". */
+    val profile: String = "",
+    val channels: Int = 0,
+    /** Channel layout text from the server, e.g. "5.1" or "5.1(side)". */
+    val layout: String = "",
+    val bitrateKbps: Int = 0,
+    val forced: Boolean = false,
+    val isDefault: Boolean = false,
+    /** Object-based / spatial audio flag (Dolby Atmos). */
+    val atmos: Boolean = false
+)
+
+/** The main video stream of an item. */
+data class VideoInfo(
+    val width: Int = 0,
+    val height: Int = 0,
+    val fps: Float = 0f,
+    val codec: String = "",
+    /** "SDR", "HDR10", "HDR10+", "HLG", "Dolby Vision", ... */
+    val hdr: String = "SDR",
+    val bitDepth: Int = 0,
+    val bitrateKbps: Int = 0
 )
 
 data class StreamsInfo(
     val sourceId: String,
     val audio: List<StreamInfo>,
-    val subs: List<StreamInfo>
+    val subs: List<StreamInfo>,
+    val video: VideoInfo? = null
 )
 
 /** Everything the player needs to start an item. */
