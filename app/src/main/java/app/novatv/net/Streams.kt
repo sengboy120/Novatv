@@ -192,7 +192,7 @@ object Streams {
     fun isDtsHd(a: StreamInfo): Boolean {
         val c = a.codec.lowercase()
         if (!(c.startsWith("dts") || c == "dca")) return false
-        val f = dts(a.profile, a.title)
+        val f = Labels.dts(a.profile, a.title)
         return f == "DTS-HD MA" || f == "DTS-HD HRA" || f == "DTS:X"
     }
 
@@ -340,7 +340,7 @@ object Labels {
     fun mbps(kbps: Int): String =
         if (kbps >= 1000) String.format(Locale.US, "%.1f Mbps", kbps / 1000f) else "$kbps kbps"
 
-    private fun dts(profile: String, title: String): String {
+    fun dts(profile: String, title: String): String {
         val p = profile.lowercase().trim()
         val all = (profile + " " + title).lowercase()
         return when {
