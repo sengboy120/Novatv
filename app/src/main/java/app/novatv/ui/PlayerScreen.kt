@@ -79,6 +79,7 @@ import app.novatv.net.SubParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Audio / subtitle menu and channel surf are drawn at this fraction of their normal size. */
@@ -376,6 +377,13 @@ fun PlayerScreen(vm: AppViewModel) {
         exo.prepare()
         exo.playWhenReady = true
         controlsTick += 1
+        if (prep.req.transcoded) {
+            val sidForProbe = p.entry.serverId
+            launch {
+                delay(6_000L)
+                vm.probePlexSession(sidForProbe)
+            }
+        }
 
         // when this program is scheduled to end, tune again (-> next program), unless the viewer
         // has paused / restarted and is watching time-shifted
@@ -705,7 +713,12 @@ fun PlayerScreen(vm: AppViewModel) {
             if (d.isNotEmpty()) formatLines.add(d)
         }
         formatLines.add(if (curTranscoded) "Server transcode  ·  up to ${playback.maxMbps} Mbps" else "Direct play")
-        if (curTranscoded && vm.plexDiag.isNotEmpty()) formatLines.add("Plex: " + vm.plexDiag)
+        if (curTranscoded && vm.plexDiag.isNotEmpty()) {
+            for (seg in vm.plexDiag.split(" | ")) formatLines.add("Plex: " + seg)
+        }
+        if (curTranscoded && vm.plexSession.isNotEmpty()) {
+            for (seg in vm.plexSession.split(" | ")) formatLines.add("Plex: " + seg)
+        }
 
         val subOff = if (info == null) playback.subLang.isEmpty() else effSub == null
         subRows.add(

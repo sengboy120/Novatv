@@ -259,7 +259,7 @@ object PlexApi {
         try {
             Http.put(q.toString(), headers(s.token, clientId))
         } catch (ex: Exception) {
-            return "selection NOT sent (" + (ex.message ?: "error") + ")"
+            return "selection NOT sent | " + (ex.message ?: "error")
         }
         // read it back so a refusal is visible instead of silent
         return try {
@@ -277,11 +277,34 @@ object PlexApi {
             }
             val okA = audioKey == null || selA == audioKey
             val okS = if (subKey == null) selS == null else selS == subKey
-            if (okA && okS) "selection saved OK (audio $audioKey, sub ${subKey ?: "off"})"
-            else "server kept audio $selA / sub ${selS ?: "off"} (wanted $audioKey / ${subKey ?: "off"})"
+            if (okA && okS) "selection saved OK | audio $audioKey  sub ${subKey ?: "off"}"
+            else "server kept other | has audio $selA  sub ${selS ?: "off"} | wanted audio $audioKey  sub ${subKey ?: "off"}"
         } catch (ex: Exception) {
             "selection sent (not verified)"
         }
+    }
+
+    /** What the server says the running transcode of this client is using (from /status/sessions). */
+    fun sessionInfo(s: Server, clientId: String): String {
+        val root = JSONObject(Http.get("${s.baseUrl}/status/sessions", headers(s.token, clientId)))
+        val list = root.getJSONObject("MediaContainer").optJSONArray("Metadata").objs()
+        if (list.isEmpty()) return "no running session on server"
+        val mine = list.firstOrNull { it.optJSONObject("Player")?.optString("machineIdentifier", "") == clientId } ?: list.first()
+        val ts = mine.optJSONObject("TranscodeSession")
+        val part = mine.optJSONArray("Media").objs().firstOrNull()?.optJSONArray("Part").objs().firstOrNull()
+        var a = "?"
+        var sub = "off"
+        for (st in part?.optJSONArray("Stream").objs()) {
+            if (!st.optBoolean("selected", false)) continue
+            val tag = st.optInt("id", -1).toString() + " " + st.optString("languageCode", st.optString("language", ""))
+            when (st.optInt("streamType", 0)) {
+                2 -> a = tag
+                3 -> sub = tag
+            }
+        }
+        val dec = if (ts == null) "no transcode info"
+        else "audio " + ts.optString("audioDecision", "?") + "  sub " + ts.optString("subtitleDecision", "?") + "  video " + ts.optString("videoDecision", "?")
+        return "server session uses audio $a | sub $sub | $dec"
     }
 }
 

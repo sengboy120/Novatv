@@ -259,6 +259,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The server refused a direct file download (HTTP 401/403) - from now on stream its titles through the server. */
     /** Last result of asking Plex to switch audio / subtitle for a transcode (shown in the track menu). */
     @Volatile var plexDiag: String = ""
+    @Volatile var plexSession: String = ""
+
+    /** Asks the Plex server which audio / subtitle its running transcode really uses (diagnostics for the track menu). */
+    suspend fun probePlexSession(serverId: String) = withContext(Dispatchers.IO) {
+        val server = _servers.value.firstOrNull { it.id == serverId }
+        plexSession = if (server == null || server.type != ServerType.PLEX) ""
+        else try {
+            PlexApi.sessionInfo(server, store.clientId)
+        } catch (ex: Exception) {
+            "session check failed | " + (ex.message ?: "error")
+        }
+    }
 
     fun markNoDirect(serverId: String) {
         store.setNoDirect(serverId, true)
