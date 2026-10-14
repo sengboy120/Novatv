@@ -246,6 +246,18 @@ object PlexApi {
         }
         return out
     }
+
+    /**
+     * Plex's transcoder takes the audio / subtitle choice from the part's saved selection (the same call Plex Web makes),
+     * so set it before the transcode session starts. [subKey] null = no subtitles.
+     */
+    fun selectStreams(s: Server, partId: String, audioKey: String?, subKey: String?, clientId: String) {
+        val q = StringBuilder("${s.baseUrl}/library/parts/$partId?allParts=1")
+        if (audioKey != null) q.append("&audioStreamID=").append(Http.enc(audioKey))
+        q.append("&subtitleStreamID=").append(Http.enc(subKey ?: "0"))
+        q.append("&X-Plex-Token=").append(Http.enc(s.token))
+        Http.put(q.toString(), headers(s.token, clientId))
+    }
 }
 
 /** plex.tv/link style sign-in so nobody has to type a token on a TV. */
@@ -278,19 +290,6 @@ object PlexAuth {
         val o = JSONObject(Http.get("$PLEX_TV/api/v2/pins/${pin.id}?code=${pin.code}", h(clientId)))
         return if (o.isNull("authToken")) null else o.getString("authToken")
     }
-
-    /**
-     * Plex's transcoder takes the audio / subtitle choice from the part's saved selection (the same call Plex Web makes),
-     * so set it before the transcode session starts. [subKey] null = no subtitles.
-     */
-    fun selectStreams(s: Server, partId: String, audioKey: String?, subKey: String?, clientId: String) {
-        val q = StringBuilder("${s.baseUrl}/library/parts/$partId?allParts=1")
-        if (audioKey != null) q.append("&audioStreamID=").append(Http.enc(audioKey))
-        q.append("&subtitleStreamID=").append(Http.enc(subKey ?: "0"))
-        q.append("&X-Plex-Token=").append(Http.enc(s.token))
-        Http.put(q.toString(), headers(s.token, clientId))
-    }
-
     /** Finds every Plex server the account can reach and picks a working address for each. */
     fun discoverServers(token: String, clientId: String): List<Server> {
         val arr = JSONArray(Http.get("$PLEX_TV/api/v2/resources?includeHttps=1&includeRelay=1", h(clientId, token)))
