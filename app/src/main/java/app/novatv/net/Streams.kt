@@ -216,7 +216,8 @@ object Streams {
         clientId: String,
         forceDirect: Boolean,
         audioKey: String?,
-        subKey: String?
+        subKey: String?,
+        plain: Boolean = false
     ): PlayRequest {
         if (forceDirect || p.mode == PlayMode.DIRECT) {
             // Text subtitles are fetched and drawn by the app itself (so position / delay can be adjusted);
@@ -244,8 +245,11 @@ object Streams {
             sb.append("&session=").append(UUID.randomUUID())
             sb.append("&X-Plex-Platform=Android&X-Plex-Product=BenditTV&X-Plex-Version=1.0")
             sb.append("&X-Plex-Client-Identifier=").append(Http.enc(clientId))
-            if (aKey != null) sb.append("&audioStreamID=").append(aKey)
-            if (sKey != null) sb.append("&subtitleStreamID=").append(sKey).append("&subtitles=burn")
+            // "plain": no stream ids in the URL (the server uses the selection saved on the part)
+            if (!plain) {
+                if (aKey != null) sb.append("&audioStreamID=").append(aKey)
+                if (sKey != null) sb.append("&subtitleStreamID=").append(sKey).append("&subtitles=burn")
+            }
             sb.append("&X-Plex-Token=").append(Http.enc(s.token))
             // Plex starts the playlist at "offset", so the player must not seek again.
             PlayRequest(sb.toString(), "application/x-mpegURL", emptyList(), 0L, true)

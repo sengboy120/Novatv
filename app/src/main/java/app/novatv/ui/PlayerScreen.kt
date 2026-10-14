@@ -103,7 +103,20 @@ private fun httpCodeOf(e: PlaybackException): Int {
 private fun errorText(e: PlaybackException): String {
     val name = e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')
     val cause = e.cause?.message?.lineSequence()?.firstOrNull()?.take(70) ?: ""
-    return if (cause.isEmpty()) name else "$name: $cause"
+    val base = if (cause.isEmpty()) name else "$name: $cause"
+    // which request was refused (path only - never the token)
+    var t: Throwable? = e
+    var depth = 0
+    while (t != null && depth < 8) {
+        if (t is HttpDataSource.InvalidResponseCodeException) {
+            val path = t.dataSpec.uri.path ?: ""
+            val body = try { String(t.responseBody).trim().replace('\n', ' ').take(60) } catch (x: Exception) { "" }
+            return base + "  [" + path.takeLast(48) + (if (body.isEmpty()) "" else "  " + body) + "]"
+        }
+        t = t.cause
+        depth += 1
+    }
+    return base
 }
 
 /** Set from the server's stream info: is the audio track that is playing really DTS-HD (MA / HRA / X)? */
@@ -171,6 +184,7 @@ fun PlayerScreen(vm: AppViewModel) {
     // audio / subtitle state
     var curInfo by remember { mutableStateOf<StreamsInfo?>(null) }
     var curTranscoded by remember { mutableStateOf(false) }
+    val plainIds = remember { HashSet<String>() }
     var audioKey by remember { mutableStateOf<String?>(null) }
     var subKey by remember { mutableStateOf<String?>(null) }
     var exoTracks by remember { mutableStateOf(Tracks.EMPTY) }
@@ -267,6 +281,11 @@ fun PlayerScreen(vm: AppViewModel) {
                     forceTranscode.add(id)
                     playError = "Server refuses direct file access (HTTP $http) - streaming through the server"
                     vm.retune()
+                } else if (curTranscoded && http == 400 && !plainIds.contains(id)) {
+                    // the server rejected the transcode request itself: ask again without stream ids in the URL
+                    plainIds.add(id)
+                    playError = "Server rejected the stream request (HTTP 400) - retrying a simpler request"
+                    vm.retune()
                 } else if (!retried.contains(id)) {
                     // 1) one plain retry (network hiccups, the surface being resized ...)
                     retried.add(id)
@@ -358,7 +377,7 @@ fun PlayerScreen(vm: AppViewModel) {
         }
 
         val prep: Prepared = try {
-            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id))
+            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id), plainIds.contains(p.entry.id))
         } catch (ex: CancellationException) {
             throw ex
         } catch (ex: Exception) {

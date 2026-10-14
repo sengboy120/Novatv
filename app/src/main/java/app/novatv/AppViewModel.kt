@@ -300,7 +300,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         forceDirect: Boolean,
         audioKey: String?,
         subKey: String?,
-        forceTranscode: Boolean = false
+        forceTranscode: Boolean = false,
+        plainStreams: Boolean = false
     ): Prepared = withContext(Dispatchers.IO) {
         val saved = _playback.value
         // direct play failed for this title: let the server convert whatever the Shield couldn't handle
@@ -333,6 +334,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
             if (a != null && Streams.isDtsHd(a)) p = p.copy(mode = PlayMode.SMART)
         }
+        plexDiag = ""
         if (inf != null && server.type == ServerType.PLEX && !forceDirect && p.mode != PlayMode.DIRECT) {
             // the Plex transcoder follows the part's saved audio / subtitle selection, so set it first
             val partId = Regex("/library/parts/(\\d+)/").find(e.streamUrl)?.groupValues?.get(1)
@@ -347,7 +349,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 plexDiag = "no part id in stream url"
             }
         }
-        Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
+        val req = Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey, plainStreams)
+        if (server.type == ServerType.PLEX && req.transcoded) {
+            // ask the transcoder for its decision first (as the official apps do), and keep the answer for the track menu
+            val dec = try {
+                PlexApi.decision(server, req.uri, store.clientId)
+            } catch (ex: Exception) {
+                "decision check failed | " + (ex.message ?: "error")
+            }
+            plexDiag = if (plexDiag.isEmpty()) dec else plexDiag + " | " + dec
+        }
+        Prepared(req, info)
     }
 
     // ---- servers -------------------------------------------------------------------------------
