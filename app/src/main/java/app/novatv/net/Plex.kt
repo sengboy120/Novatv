@@ -18,7 +18,7 @@ object PlexApi {
         "X-Plex-Token" to token,
         "Accept" to "application/json",
         "X-Plex-Client-Identifier" to clientId,
-        "X-Plex-Product" to "NovaTV",
+        "X-Plex-Product" to "BenditTV",
         "X-Plex-Version" to "1.0"
     )
 
@@ -255,9 +255,9 @@ object PlexAuth {
         val m = mutableMapOf(
             "Accept" to "application/json",
             "X-Plex-Client-Identifier" to clientId,
-            "X-Plex-Product" to "NovaTV",
+            "X-Plex-Product" to "BenditTV",
             "X-Plex-Version" to "1.0",
-            "X-Plex-Device-Name" to "NovaTV (Android TV)",
+            "X-Plex-Device-Name" to "Bendit TV (Android TV)",
             "X-Plex-Platform" to "Android"
         )
         if (token != null) m["X-Plex-Token"] = token

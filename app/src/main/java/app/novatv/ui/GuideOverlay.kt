@@ -295,7 +295,7 @@ fun GuideOverlay(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "NOVA TV",
+                    "BENDIT TV",
                     style = TextStyle(
                         brush = Nova.neon,
                         fontSize = 22.sp,

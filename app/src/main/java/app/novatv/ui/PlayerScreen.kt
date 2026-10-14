@@ -150,6 +150,8 @@ fun PlayerScreen(vm: AppViewModel) {
     var posBaseMs by remember { mutableLongStateOf(0L) }
     var live by remember { mutableStateOf(true) }
     var paused by remember { mutableStateOf(false) }
+    var exitAsk by remember { mutableStateOf(false) }
+    val exitNoFocus = remember { FocusRequester() }
     var startOverrideMs by remember { mutableStateOf<Long?>(null) }
 
     // audio / subtitle state
@@ -461,8 +463,18 @@ fun PlayerScreen(vm: AppViewModel) {
     }
 
     val rootFocus = remember { FocusRequester() }
-    LaunchedEffect(guideOpen, trackMenuOpen) {
-        if (!guideOpen && !trackMenuOpen) {
+    LaunchedEffect(exitAsk) {
+        if (exitAsk) {
+            delay(120L)
+            try {
+                exitNoFocus.requestFocus()
+            } catch (e: Exception) {
+                // dialog not laid out yet
+            }
+        }
+    }
+    LaunchedEffect(guideOpen, trackMenuOpen, exitAsk) {
+        if (!guideOpen && !trackMenuOpen && !exitAsk) {
             delay(120L)
             try {
                 rootFocus.requestFocus()
@@ -644,14 +656,16 @@ fun PlayerScreen(vm: AppViewModel) {
         }
     }
 
-    BackHandler(enabled = guideOpen || trackMenuOpen || surfOpen || infoOpen || controlsVisible || paused) {
+    BackHandler {
         when {
+            exitAsk -> exitAsk = false
             trackMenuOpen -> trackMenuOpen = false
             surfOpen -> surfOpen = false
             guideOpen -> guideOpen = false
             infoOpen -> infoOpen = false
             controlsVisible -> controlsVisible = false
             paused -> exo.playWhenReady = true
+            else -> exitAsk = true
         }
     }
 
@@ -815,7 +829,7 @@ fun PlayerScreen(vm: AppViewModel) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { ev ->
-                if (guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown) {
+                if (exitAsk || guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown) {
                     false
                 } else if (surfOpen) {
                     handleSurfKey(ev.key)
@@ -978,6 +992,14 @@ fun PlayerScreen(vm: AppViewModel) {
         val err = playError
         if (err != null) {
             Pill(err, Modifier.align(Alignment.TopCenter).padding(24.dp), Nova.danger)
+        }
+
+        if (exitAsk) {
+            ExitDialog(
+                noFocus = exitNoFocus,
+                onYes = { (ctx as? android.app.Activity)?.finish() },
+                onNo = { exitAsk = false }
+            )
         }
     }
 }

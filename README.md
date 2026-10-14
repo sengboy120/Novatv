@@ -1,4 +1,4 @@
-# NovaTV — ทีวีจำลองจากคลัง Plex / Jellyfin / Emby (Android TV / Nvidia Shield)
+# Bendit TV — ทีวีจำลองจากคลัง Plex / Jellyfin / Emby (Android TV / Nvidia Shield)
 
 แอปสร้าง "ช่องทีวี" จากหนัง/ซีรีส์ในเซิร์ฟเวอร์ของคุณ เล่นต่อเนื่องตามตารางเวลาแบบทีวีสด
 (ช่อง Action / Comedy / Drama / Sci-Fi ฯลฯ และช่องตามเครือข่ายของซีรีส์) ธีมนีออนล้ำสมัย
@@ -106,6 +106,13 @@
 
 - DTS-HD MA ในไฟล์ MKV มักถูกติดป้าย `A_DTS` ทำให้ ExoPlayer ส่งแค่ DTS core (AVR ขึ้น "DTS" เฉยๆ) ตอนนี้แอปดูข้อมูลสตรีมจากเซิร์ฟเวอร์ ถ้าแทร็กเป็น DTS-HD จริงจะส่งเป็น DTS-HD ให้เต็ม (โหมด PASSTHROUGH)
 - หน้า Guide: กด ◀ ที่รายการแรกของแถวเพื่อไปกล่องชื่อช่อง และกด ▶ จากกล่องชื่อช่องเพื่อกลับไปรายการที่ฉายอยู่; ซีรีส์แสดงเลขตอน (S01E02) ในกล่องรายการ
+
+## หน้าตาแอป
+
+- ชื่อแอป **Bendit TV** (package เดิม `app.novatv` จึงติดตั้งทับของเดิมได้ ตั้งค่าและเซิร์ฟเวอร์ไม่หาย)
+- เปิดแอปมีโลโก้ขึ้น ~2.5 วินาที (กดปุ่มใดก็ข้าม) รูปคือ `app/src/main/res/drawable-nodpi/logo.webp` (โลโก้สี่เหลี่ยมวางกลางพื้นหลังสีเข้ม)
+- กด BACK ตอนอยู่หน้าภาพปกติ จะขึ้นถาม "Exit Bendit TV?" เลือก YES, EXIT / NO, STAY
+- ไอคอนบน Shield (banner) คือ `res/drawable-xhdpi/banner.png` (640×360, ใช้รูปกว้างโลโก้ + ทีวีในห้อง) ไอคอนแอปบนมือถือคือ `res/drawable-nodpi/ic_launcher_fg.png` + `res/mipmap-xxxhdpi/ic_launcher.png`
 
 ## ถ้าเล่นไฟล์ไม่ได้
 

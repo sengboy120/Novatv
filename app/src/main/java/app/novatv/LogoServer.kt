@@ -65,7 +65,7 @@ class LogoServer(port: Int, private val channels: () -> List<Channel>) : NanoHTT
         val sb = StringBuilder()
         sb.append(
             """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NovaTV logos</title><style>
+<title>Bendit TV logos</title><style>
 body{margin:0;background:#07070d;color:#eee;font-family:system-ui,sans-serif}
 h1{font-size:20px;margin:0;padding:18px 16px 4px}p.s{margin:0;padding:0 16px 14px;color:#99a;font-size:14px}
 .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;padding:0 16px 40px}
@@ -78,7 +78,7 @@ input[type=file]{width:100%;color:#ccc;font-size:13px;margin-bottom:8px}
 button{background:#2b2b44;color:#fff;border:0;border-radius:20px;padding:8px 16px;font-size:14px;margin-right:6px}
 button.r{background:#3a1d26}
 </style></head><body>
-<h1>NovaTV &mdash; channel logos</h1>
+<h1>Bendit TV &mdash; channel logos</h1>
 <p class="s">Pick an image (PNG / JPG / WebP, transparent PNG looks best) and press Upload. It shows up on the TV at once.</p>
 <div class="g">"""
         )

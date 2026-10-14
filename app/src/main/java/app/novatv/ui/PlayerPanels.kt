@@ -902,3 +902,49 @@ fun Slate(
         }
     }
 }
+
+
+// ------------------------------------------------------------------------------------------------
+// "Exit?" question shown when BACK is pressed on the plain picture
+// ------------------------------------------------------------------------------------------------
+
+@Composable
+fun ExitDialog(noFocus: FocusRequester, onYes: () -> Unit, onNo: () -> Unit) {
+    val shape = RoundedCornerShape(22.dp)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xB3000000)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .width(460.dp)
+                .clip(shape)
+                .background(Color(0xFF111119))
+                .border(1.5.dp, Brush.horizontalGradient(listOf(Color(0xFFFFB347), Color(0xFFFF6A2B))), shape)
+                .padding(horizontal = 28.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                "Exit Bendit TV?",
+                color = Color.White,
+                fontSize = 24.sp,
+                lineHeight = 30.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Do you want to exit?",
+                color = Nova.textDim,
+                fontSize = 15.sp,
+                lineHeight = 20.sp
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                NeonButton("YES, EXIT", onClick = onYes, accent = Nova.danger)
+                NeonButton("NO, STAY", onClick = onNo, accent = Nova.cyan, focusRequester = noFocus)
+            }
+        }
+    }
+}

@@ -231,7 +231,7 @@ object Streams {
             sb.append("&subtitleSize=100&audioBoost=100&copyts=1")
             sb.append("&offset=").append(offsetMs / 1000L)
             sb.append("&session=").append(UUID.randomUUID())
-            sb.append("&X-Plex-Platform=Android&X-Plex-Product=NovaTV&X-Plex-Version=1.0")
+            sb.append("&X-Plex-Platform=Android&X-Plex-Product=BenditTV&X-Plex-Version=1.0")
             sb.append("&X-Plex-Client-Identifier=").append(Http.enc(clientId))
             if (aKey != null) sb.append("&audioStreamID=").append(aKey)
             if (sKey != null) sb.append("&subtitleStreamID=").append(sKey).append("&subtitles=burn")

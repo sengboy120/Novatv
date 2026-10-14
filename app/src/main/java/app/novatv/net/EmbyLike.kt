@@ -14,7 +14,7 @@ object EmbyLike {
     private const val PAGE = 1000
 
     private fun authHeader(deviceId: String): String =
-        "MediaBrowser Client=\"NovaTV\", Device=\"Android TV\", DeviceId=\"$deviceId\", Version=\"1.0\""
+        "MediaBrowser Client=\"BenditTV\", Device=\"Android TV\", DeviceId=\"$deviceId\", Version=\"1.0\""
 
     fun login(type: ServerType, rawUrl: String, user: String, pass: String, deviceId: String): Server {
         val base = Http.normalizeUrl(rawUrl)

@@ -142,7 +142,7 @@ fun SettingsScreen(vm: AppViewModel) {
     }
 
     ScreenFrame {
-        Title("SETTINGS", "NOVA TV")
+        Title("SETTINGS", "BENDIT TV")
 
         SectionLabel("MEDIA SERVERS")
         if (servers.isEmpty()) {
