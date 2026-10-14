@@ -167,6 +167,9 @@ object PlexApi {
     fun fetch(s: Server, clientId: String): List<MediaEntry> {
         val h = headers(s.token, clientId)
         val tokenQ = "X-Plex-Token=${Http.enc(s.token)}"
+        // the raw-file request identifies the client the same way the transcoder request does
+        val fileQ = tokenQ + "&X-Plex-Client-Identifier=" + Http.enc(clientId) +
+            "&X-Plex-Product=BenditTV&X-Plex-Platform=Android&X-Plex-Version=1.0"
         val sections = JSONObject(Http.get("${s.baseUrl}/library/sections", h))
             .getJSONObject("MediaContainer").optJSONArray("Directory").objs()
 
@@ -195,7 +198,7 @@ object PlexApi {
                                 year = m.optInt("year", 0),
                                 durationMs = m.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$tokenQ",
+                                streamUrl = "${s.baseUrl}$part?$fileQ",
                                 overview = m.optString("summary", "").take(420),
                                 rating = bestRating(m),
                                 mpaa = m.optString("contentRating", "")
@@ -231,7 +234,7 @@ object PlexApi {
                                 year = e.optInt("year", 0),
                                 durationMs = e.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$tokenQ",
+                                streamUrl = "${s.baseUrl}$part?$fileQ",
                                 overview = e.optString("summary", "").take(420),
                                 rating = bestRating(e),
                                 mpaa = e.optString("contentRating", "")
@@ -274,6 +277,18 @@ object PlexAuth {
     fun pollPin(pin: Pin, clientId: String): String? {
         val o = JSONObject(Http.get("$PLEX_TV/api/v2/pins/${pin.id}?code=${pin.code}", h(clientId)))
         return if (o.isNull("authToken")) null else o.getString("authToken")
+    }
+
+    /**
+     * Plex's transcoder takes the audio / subtitle choice from the part's saved selection (the same call Plex Web makes),
+     * so set it before the transcode session starts. [subKey] null = no subtitles.
+     */
+    fun selectStreams(s: Server, partId: String, audioKey: String?, subKey: String?, clientId: String) {
+        val q = StringBuilder("${s.baseUrl}/library/parts/$partId?allParts=1")
+        if (audioKey != null) q.append("&audioStreamID=").append(Http.enc(audioKey))
+        q.append("&subtitleStreamID=").append(Http.enc(subKey ?: "0"))
+        q.append("&X-Plex-Token=").append(Http.enc(s.token))
+        Http.put(q.toString(), headers(s.token, clientId))
     }
 
     /** Finds every Plex server the account can reach and picks a working address for each. */

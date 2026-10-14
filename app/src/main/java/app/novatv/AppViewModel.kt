@@ -256,7 +256,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- playback / tracks ---------------------------------------------------------------------
 
+    /** The server refused a direct file download (HTTP 401/403) - from now on stream its titles through the server. */
+    fun markNoDirect(serverId: String) {
+        store.setNoDirect(serverId, true)
+    }
+
     fun updatePlayback(p: PlaybackSettings) {
+        // picking another play mode gives direct play a fresh chance
+        if (p.mode != _playback.value.mode) store.clearNoDirect()
         _playback.value = p
         store.savePlayback(p)
     }
@@ -282,7 +289,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     ): Prepared = withContext(Dispatchers.IO) {
         val saved = _playback.value
         // direct play failed for this title: let the server convert whatever the Shield couldn't handle
-        var p = if (forceTranscode && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
+        val refused = store.noDirectServers().contains(e.serverId)
+        var p = if ((forceTranscode || refused) && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
         val server = _servers.value.firstOrNull { it.id == e.serverId }
         if (server == null) {
             return@withContext Prepared(PlayRequest(e.streamUrl, null, emptyList(), offsetMs, false), null)
@@ -309,6 +317,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val a = (if (ak == null) null else inf.audio.firstOrNull { it.key == ak })
                 ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
             if (a != null && Streams.isDtsHd(a)) p = p.copy(mode = PlayMode.SMART)
+        }
+        if (inf != null && server.type == ServerType.PLEX && !forceDirect && p.mode != PlayMode.DIRECT) {
+            // the Plex transcoder follows the part's saved audio / subtitle selection, so set it first
+            val partId = Regex("/library/parts/(\\d+)/").find(e.streamUrl)?.groupValues?.get(1)
+            if (partId != null) {
+                val ks = Streams.chosenKeys(inf, p, audioKey, subKey)
+                try {
+                    PlexApi.selectStreams(server, partId, ks.first, ks.second, store.clientId)
+                } catch (ex: Exception) {
+                    // not fatal: the transcode URL still carries the stream ids
+                }
+            }
         }
         Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
     }

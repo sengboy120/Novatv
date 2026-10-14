@@ -95,6 +95,19 @@ class Store(context: Context) {
             .apply()
     }
 
+    /** Servers that answered 401/403 to a direct file request: use the server's own streaming for them. */
+    fun noDirectServers(): Set<String> = prefs.getStringSet("noDirectServers", emptySet())?.toSet() ?: emptySet()
+
+    fun setNoDirect(serverId: String, on: Boolean) {
+        val s = noDirectServers().toMutableSet()
+        if (on) s.add(serverId) else s.remove(serverId)
+        prefs.edit().putStringSet("noDirectServers", s).apply()
+    }
+
+    fun clearNoDirect() {
+        prefs.edit().remove("noDirectServers").apply()
+    }
+
     var lastChannelId: String?
         get() = prefs.getString("lastChannel", null)
         set(value) {

@@ -188,6 +188,17 @@ object Streams {
      * @param audioKey explicit audio stream chosen from the menu (null = use the preferred language)
      * @param subKey explicit subtitle stream chosen from the menu ("" = off, null = use preferred language)
      */
+    /** The audio / subtitle stream keys a playback request will use ([audioKey] / [subKey] win over the saved languages). */
+    fun chosenKeys(info: StreamsInfo?, p: PlaybackSettings, audioKey: String?, subKey: String?): Pair<String?, String?> {
+        val a = audioKey ?: pickAudio(info, p.audioLang) ?: (info?.audio?.firstOrNull { it.isDefault } ?: info?.audio?.firstOrNull())?.key
+        val s = when {
+            subKey == null -> pickSub(info, p.subLang)
+            subKey.isEmpty() -> null
+            else -> subKey
+        }
+        return Pair(a, s)
+    }
+
     /** True for DTS-HD MA / HRA / DTS:X (not for the plain DTS core). */
     fun isDtsHd(a: StreamInfo): Boolean {
         val c = a.codec.lowercase()

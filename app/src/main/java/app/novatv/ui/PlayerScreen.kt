@@ -50,6 +50,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioCapabilities
@@ -85,6 +86,18 @@ private const val PANEL_SCALE = 0.75f
 
 /** What the full-screen slate says (between programmes, or when a title can't be played). */
 private class SlateMsg(val headline: String, val title: String, val detail: String, val isError: Boolean)
+
+/** The HTTP status behind a playback error (e.g. 403), or 0 when it was not an HTTP status error. */
+private fun httpCodeOf(e: PlaybackException): Int {
+    var t: Throwable? = e
+    var depth = 0
+    while (t != null && depth < 8) {
+        if (t is HttpDataSource.InvalidResponseCodeException) return t.responseCode
+        t = t.cause
+        depth += 1
+    }
+    return 0
+}
 
 private fun errorText(e: PlaybackException): String {
     val name = e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')
@@ -244,7 +257,16 @@ fun PlayerScreen(vm: AppViewModel) {
                 val id = playingId
                 val why = errorText(error)
                 val c = vm.currentChannel()
-                if (!retried.contains(id)) {
+                val http = httpCodeOf(error)
+                if (!curTranscoded && (http == 401 || http == 403) && !forceDirect.contains(id) && !forceTranscode.contains(id)) {
+                    // the server won't hand out the raw file (e.g. "allow media downloading" is off for this user):
+                    // no point retrying - remember it and stream through the server instead
+                    val sid = (if (c != null) Scheduler.programAt(c, vm.now()) else null)?.entry?.serverId
+                    if (sid != null) vm.markNoDirect(sid)
+                    forceTranscode.add(id)
+                    playError = "Server refuses direct file access (HTTP $http) - streaming through the server"
+                    vm.retune()
+                } else if (!retried.contains(id)) {
                     // 1) one plain retry (network hiccups, the surface being resized ...)
                     retried.add(id)
                     playError = "Playback hiccup ($why) - retrying"
