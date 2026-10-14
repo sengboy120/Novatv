@@ -251,12 +251,37 @@ object PlexApi {
      * Plex's transcoder takes the audio / subtitle choice from the part's saved selection (the same call Plex Web makes),
      * so set it before the transcode session starts. [subKey] null = no subtitles.
      */
-    fun selectStreams(s: Server, partId: String, audioKey: String?, subKey: String?, clientId: String) {
+    fun selectStreams(s: Server, itemId: String, partId: String, audioKey: String?, subKey: String?, clientId: String): String {
         val q = StringBuilder("${s.baseUrl}/library/parts/$partId?allParts=1")
         if (audioKey != null) q.append("&audioStreamID=").append(Http.enc(audioKey))
         q.append("&subtitleStreamID=").append(Http.enc(subKey ?: "0"))
         q.append("&X-Plex-Token=").append(Http.enc(s.token))
-        Http.put(q.toString(), headers(s.token, clientId))
+        try {
+            Http.put(q.toString(), headers(s.token, clientId))
+        } catch (ex: Exception) {
+            return "selection NOT sent (" + (ex.message ?: "error") + ")"
+        }
+        // read it back so a refusal is visible instead of silent
+        return try {
+            val root = JSONObject(Http.get("${s.baseUrl}/library/metadata/$itemId", headers(s.token, clientId)))
+            val md = root.getJSONObject("MediaContainer").optJSONArray("Metadata").objs().firstOrNull()
+            val part = md?.optJSONArray("Media").objs().firstOrNull()?.optJSONArray("Part").objs().firstOrNull()
+            var selA: String? = null
+            var selS: String? = null
+            for (st in part?.optJSONArray("Stream").objs()) {
+                if (!st.optBoolean("selected", false)) continue
+                when (st.optInt("streamType", 0)) {
+                    2 -> selA = st.optInt("id", -1).toString()
+                    3 -> selS = st.optInt("id", -1).toString()
+                }
+            }
+            val okA = audioKey == null || selA == audioKey
+            val okS = if (subKey == null) selS == null else selS == subKey
+            if (okA && okS) "selection saved OK (audio $audioKey, sub ${subKey ?: "off"})"
+            else "server kept audio $selA / sub ${selS ?: "off"} (wanted $audioKey / ${subKey ?: "off"})"
+        } catch (ex: Exception) {
+            "selection sent (not verified)"
+        }
     }
 }
 

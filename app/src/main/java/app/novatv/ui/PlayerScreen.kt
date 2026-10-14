@@ -705,6 +705,7 @@ fun PlayerScreen(vm: AppViewModel) {
             if (d.isNotEmpty()) formatLines.add(d)
         }
         formatLines.add(if (curTranscoded) "Server transcode  ·  up to ${playback.maxMbps} Mbps" else "Direct play")
+        if (curTranscoded && vm.plexDiag.isNotEmpty()) formatLines.add("Plex: " + vm.plexDiag)
 
         val subOff = if (info == null) playback.subLang.isEmpty() else effSub == null
         subRows.add(

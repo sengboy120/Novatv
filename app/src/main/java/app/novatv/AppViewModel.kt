@@ -257,6 +257,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- playback / tracks ---------------------------------------------------------------------
 
     /** The server refused a direct file download (HTTP 401/403) - from now on stream its titles through the server. */
+    /** Last result of asking Plex to switch audio / subtitle for a transcode (shown in the track menu). */
+    @Volatile var plexDiag: String = ""
+
     fun markNoDirect(serverId: String) {
         store.setNoDirect(serverId, true)
     }
@@ -323,11 +326,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val partId = Regex("/library/parts/(\\d+)/").find(e.streamUrl)?.groupValues?.get(1)
             if (partId != null) {
                 val ks = Streams.chosenKeys(inf, p, audioKey, subKey)
-                try {
-                    PlexApi.selectStreams(server, partId, ks.first, ks.second, store.clientId)
+                plexDiag = try {
+                    PlexApi.selectStreams(server, e.itemId, partId, ks.first, ks.second, store.clientId)
                 } catch (ex: Exception) {
-                    // not fatal: the transcode URL still carries the stream ids
+                    "selection failed (" + (ex.message ?: "error") + ")"
                 }
+            } else {
+                plexDiag = "no part id in stream url"
             }
         }
         Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
