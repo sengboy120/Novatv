@@ -12,7 +12,9 @@ data class Server(
     val name: String,
     val baseUrl: String,
     val token: String,
-    val userId: String = ""
+    val userId: String = "",
+    /** Switched off servers are kept (login and all) but ignored: no sync, no channels. */
+    val enabled: Boolean = true
 )
 
 enum class EntryKind { MOVIE, EPISODE }

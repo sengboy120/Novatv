@@ -37,6 +37,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -50,7 +51,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
-import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioCapabilities
@@ -79,7 +79,6 @@ import app.novatv.net.SubParser
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Audio / subtitle menu and channel surf are drawn at this fraction of their normal size. */
@@ -88,35 +87,10 @@ private const val PANEL_SCALE = 0.75f
 /** What the full-screen slate says (between programmes, or when a title can't be played). */
 private class SlateMsg(val headline: String, val title: String, val detail: String, val isError: Boolean)
 
-/** The HTTP status behind a playback error (e.g. 403), or 0 when it was not an HTTP status error. */
-private fun httpCodeOf(e: PlaybackException): Int {
-    var t: Throwable? = e
-    var depth = 0
-    while (t != null && depth < 8) {
-        if (t is HttpDataSource.InvalidResponseCodeException) return t.responseCode
-        t = t.cause
-        depth += 1
-    }
-    return 0
-}
-
 private fun errorText(e: PlaybackException): String {
     val name = e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')
     val cause = e.cause?.message?.lineSequence()?.firstOrNull()?.take(70) ?: ""
-    val base = if (cause.isEmpty()) name else "$name: $cause"
-    // which request was refused (path only - never the token)
-    var t: Throwable? = e
-    var depth = 0
-    while (t != null && depth < 8) {
-        if (t is HttpDataSource.InvalidResponseCodeException) {
-            val path = t.dataSpec.uri.path ?: ""
-            val body = try { String(t.responseBody).trim().replace('\n', ' ').take(60) } catch (x: Exception) { "" }
-            return base + "  [" + path.takeLast(48) + (if (body.isEmpty()) "" else "  " + body) + "]"
-        }
-        t = t.cause
-        depth += 1
-    }
-    return base
+    return if (cause.isEmpty()) name else "$name: $cause"
 }
 
 /** Set from the server's stream info: is the audio track that is playing really DTS-HD (MA / HRA / X)? */
@@ -150,6 +124,9 @@ private fun dtsHdOf(inf: StreamsInfo?, key: String?): Boolean {
 @Composable
 fun PlayerScreen(vm: AppViewModel) {
     val ctx = LocalContext.current
+    val isTv = remember { Device.isTv(ctx) }
+    // short screens (a phone held sideways) get a smaller guide header / preview window
+    GuideMetrics.applyFor(LocalConfiguration.current.screenHeightDp)
     val channels by vm.channels.collectAsState()
     val currentId by vm.currentChannelId.collectAsState()
     val nonce by vm.tuneNonce.collectAsState()
@@ -184,7 +161,6 @@ fun PlayerScreen(vm: AppViewModel) {
     // audio / subtitle state
     var curInfo by remember { mutableStateOf<StreamsInfo?>(null) }
     var curTranscoded by remember { mutableStateOf(false) }
-    val plainIds = remember { HashSet<String>() }
     var audioKey by remember { mutableStateOf<String?>(null) }
     var subKey by remember { mutableStateOf<String?>(null) }
     var exoTracks by remember { mutableStateOf(Tracks.EMPTY) }
@@ -272,21 +248,7 @@ fun PlayerScreen(vm: AppViewModel) {
                 val id = playingId
                 val why = errorText(error)
                 val c = vm.currentChannel()
-                val http = httpCodeOf(error)
-                if (!curTranscoded && (http == 401 || http == 403) && !forceDirect.contains(id) && !forceTranscode.contains(id)) {
-                    // the server won't hand out the raw file (e.g. "allow media downloading" is off for this user):
-                    // no point retrying - remember it and stream through the server instead
-                    val sid = (if (c != null) Scheduler.programAt(c, vm.now()) else null)?.entry?.serverId
-                    if (sid != null) vm.markNoDirect(sid)
-                    forceTranscode.add(id)
-                    playError = "Server refuses direct file access (HTTP $http) - streaming through the server"
-                    vm.retune()
-                } else if (curTranscoded && http == 400 && !plainIds.contains(id)) {
-                    // the server rejected the transcode request itself: ask again without stream ids in the URL
-                    plainIds.add(id)
-                    playError = "Server rejected the stream request (HTTP 400) - retrying a simpler request"
-                    vm.retune()
-                } else if (!retried.contains(id)) {
+                if (!retried.contains(id)) {
                     // 1) one plain retry (network hiccups, the surface being resized ...)
                     retried.add(id)
                     playError = "Playback hiccup ($why) - retrying"
@@ -377,7 +339,7 @@ fun PlayerScreen(vm: AppViewModel) {
         }
 
         val prep: Prepared = try {
-            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id), plainIds.contains(p.entry.id))
+            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id))
         } catch (ex: CancellationException) {
             throw ex
         } catch (ex: Exception) {
@@ -396,13 +358,6 @@ fun PlayerScreen(vm: AppViewModel) {
         exo.prepare()
         exo.playWhenReady = true
         controlsTick += 1
-        if (prep.req.transcoded) {
-            val sidForProbe = p.entry.serverId
-            launch {
-                delay(6_000L)
-                vm.probePlexSession(sidForProbe)
-            }
-        }
 
         // when this program is scheduled to end, tune again (-> next program), unless the viewer
         // has paused / restarted and is watching time-shifted
@@ -718,6 +673,31 @@ fun PlayerScreen(vm: AppViewModel) {
         }
     }
 
+    // ---- touch --------------------------------------------------------------------------------------
+    val onScreenTap: () -> Unit = {
+        when {
+            exitAsk -> exitAsk = false
+            guideOpen -> Unit
+            trackMenuOpen -> trackMenuOpen = false
+            surfOpen -> surfOpen = false
+            channels.isEmpty() -> vm.openSettings()
+            infoOpen -> infoOpen = false
+            controlsVisible -> controlsVisible = false
+            else -> controlsTick += 1
+        }
+    }
+    val onScreenDoubleTap: (Boolean) -> Unit = { left ->
+        if (!exitAsk && !guideOpen && !trackMenuOpen && !surfOpen && channels.isNotEmpty()) {
+            seekBy(if (left) -10_000L else 30_000L)
+        }
+    }
+    val onScreenSwipe: (Int) -> Unit = { dir ->
+        if (!exitAsk && !guideOpen && !trackMenuOpen && channels.isNotEmpty()) {
+            vm.channelStep(dir)
+            controlsTick += 1
+        }
+    }
+
     // ---- audio / subtitle menu content --------------------------------------------------------------
     val subRows = ArrayList<TrackRowData>()
     val audioRows = ArrayList<TrackRowData>()
@@ -732,12 +712,6 @@ fun PlayerScreen(vm: AppViewModel) {
             if (d.isNotEmpty()) formatLines.add(d)
         }
         formatLines.add(if (curTranscoded) "Server transcode  ·  up to ${playback.maxMbps} Mbps" else "Direct play")
-        if (curTranscoded && vm.plexDiag.isNotEmpty()) {
-            for (seg in vm.plexDiag.split(" | ")) formatLines.add("Plex: " + seg)
-        }
-        if (curTranscoded && vm.plexSession.isNotEmpty()) {
-            for (seg in vm.plexSession.split(" | ")) formatLines.add("Plex: " + seg)
-        }
 
         val subOff = if (info == null) playback.subLang.isEmpty() else effSub == null
         subRows.add(
@@ -957,6 +931,13 @@ fun PlayerScreen(vm: AppViewModel) {
             SubtitleOverlay(cues, subDelayMs, playback.subPos, { exo.currentPosition })
         }
 
+        // touch: tap = show / hide controls, double tap = skip, swipe = change channel
+        Box(
+            Modifier
+                .fillMaxSize()
+                .touchLayer(onScreenTap, onScreenDoubleTap, onScreenSwipe)
+        )
+
         // ---- control bar (Pause / Restart / Go Live / Guide / Channel Surf / Audio & Subs / Info) ----
         AnimatedVisibility(
             visible = barShown && entry != null,
@@ -985,7 +966,12 @@ fun PlayerScreen(vm: AppViewModel) {
                     elapsedMs = elapsed.coerceAtLeast(0L),
                     totalMs = total,
                     endClockMs = endClock,
-                    infoLines = infoLines
+                    infoLines = infoLines,
+                    onActivate = { activate(it) },
+                    onChannel = {
+                        vm.channelStep(it)
+                        controlsTick += 1
+                    }
                 )
             }
         }
@@ -1013,7 +999,7 @@ fun PlayerScreen(vm: AppViewModel) {
 
         // the channel-surf and audio / subtitle panels are drawn smaller than everything else
         val baseDensity = LocalDensity.current
-        val panelDensity = remember(baseDensity) { Density(baseDensity.density * PANEL_SCALE, baseDensity.fontScale) }
+        val panelDensity = remember(baseDensity) { Density(baseDensity.density * (if (isTv) PANEL_SCALE else 1f), baseDensity.fontScale) }
         CompositionLocalProvider(LocalDensity provides panelDensity) {
             AnimatedVisibility(
                 visible = surfOpen,
@@ -1021,7 +1007,14 @@ fun PlayerScreen(vm: AppViewModel) {
                 enter = fadeIn() + slideInHorizontally { it / 2 },
                 exit = fadeOut() + slideOutHorizontally { it / 2 }
             ) {
-                SurfPanel(channels, surfIdx, tickNow, currentId)
+                SurfPanel(
+                    channels, surfIdx, tickNow, currentId,
+                    modifier = Modifier.swallowTouch(),
+                    onPick = { idx ->
+                        if (idx in channels.indices) vm.tune(channels[idx].id)
+                        surfOpen = false
+                    }
+                )
             }
 
             AnimatedVisibility(

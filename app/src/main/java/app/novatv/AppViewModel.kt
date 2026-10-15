@@ -120,12 +120,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            val cached = store.loadEntries()
+            val on = _servers.value.filter { it.enabled }.map { it.id }.toSet()
+            val cached = store.loadEntries().filter { it.serverId in on }
             if (cached.isNotEmpty()) {
                 _entries.value = cached
                 rebuild(retune = true)
             }
-            if (_servers.value.isNotEmpty()) refreshInternal()
+            if (_servers.value.any { it.enabled }) refreshInternal()
         }
     }
 
@@ -206,8 +207,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { refreshInternal() }
     }
 
+    @Volatile
+    private var refreshAgain = false
+
     private fun refreshInternal() {
-        if (_busy.value) return
+        if (_busy.value) {
+            // a sync is already running: run once more when it is done (e.g. a server was just switched)
+            refreshAgain = true
+            return
+        }
+        do {
+            refreshAgain = false
+            refreshOnce()
+        } while (refreshAgain)
+    }
+
+    private fun refreshOnce() {
         _busy.value = true
         try {
             val wasEmpty = _channels.value.isEmpty()
@@ -216,7 +231,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val errors = ArrayList<String>()
             val clientId = store.clientId
 
-            for (s in _servers.value) {
+            for (s in _servers.value.filter { it.enabled }) {
                 _status.value = "Syncing ${s.name}…"
                 try {
                     val list = when (s.type) {
@@ -241,7 +256,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _status.value = "${d.size} titles · ${_channels.value.size} channels" +
                     (if (errors.isNotEmpty()) " · ${errors.size} server(s) unreachable" else "")
             } else {
-                _status.value = if (errors.isNotEmpty()) errors.joinToString("; ") else "No media found on your servers"
+                _status.value = when {
+                    errors.isNotEmpty() -> errors.joinToString("; ")
+                    _servers.value.none { it.enabled } -> "All servers are switched off - switch one on in Settings"
+                    else -> "No media found on your servers"
+                }
             }
         } finally {
             _busy.value = false
@@ -256,29 +275,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- playback / tracks ---------------------------------------------------------------------
 
-    /** The server refused a direct file download (HTTP 401/403) - from now on stream its titles through the server. */
-    /** Last result of asking Plex to switch audio / subtitle for a transcode (shown in the track menu). */
-    @Volatile var plexDiag: String = ""
-    @Volatile var plexSession: String = ""
-
-    /** Asks the Plex server which audio / subtitle its running transcode really uses (diagnostics for the track menu). */
-    suspend fun probePlexSession(serverId: String) = withContext(Dispatchers.IO) {
-        val server = _servers.value.firstOrNull { it.id == serverId }
-        plexSession = if (server == null || server.type != ServerType.PLEX) ""
-        else try {
-            PlexApi.sessionInfo(server, store.clientId)
-        } catch (ex: Exception) {
-            "session check failed | " + (ex.message ?: "error")
-        }
-    }
-
-    fun markNoDirect(serverId: String) {
-        store.setNoDirect(serverId, true)
-    }
-
     fun updatePlayback(p: PlaybackSettings) {
-        // picking another play mode gives direct play a fresh chance
-        if (p.mode != _playback.value.mode) store.clearNoDirect()
         _playback.value = p
         store.savePlayback(p)
     }
@@ -300,13 +297,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         forceDirect: Boolean,
         audioKey: String?,
         subKey: String?,
-        forceTranscode: Boolean = false,
-        plainStreams: Boolean = false
+        forceTranscode: Boolean = false
     ): Prepared = withContext(Dispatchers.IO) {
         val saved = _playback.value
         // direct play failed for this title: let the server convert whatever the Shield couldn't handle
-        val refused = store.noDirectServers().contains(e.serverId)
-        var p = if ((forceTranscode || refused) && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
+        var p = if (forceTranscode && saved.mode == PlayMode.DIRECT) saved.copy(mode = PlayMode.SMART) else saved
         val server = _servers.value.firstOrNull { it.id == e.serverId }
         if (server == null) {
             return@withContext Prepared(PlayRequest(e.streamUrl, null, emptyList(), offsetMs, false), null)
@@ -334,32 +329,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
             if (a != null && Streams.isDtsHd(a)) p = p.copy(mode = PlayMode.SMART)
         }
-        plexDiag = ""
-        if (inf != null && server.type == ServerType.PLEX && !forceDirect && p.mode != PlayMode.DIRECT) {
-            // the Plex transcoder follows the part's saved audio / subtitle selection, so set it first
-            val partId = Regex("/library/parts/(\\d+)/").find(e.streamUrl)?.groupValues?.get(1)
-            if (partId != null) {
-                val ks = Streams.chosenKeys(inf, p, audioKey, subKey)
-                plexDiag = try {
-                    PlexApi.selectStreams(server, e.itemId, partId, ks.first, ks.second, store.clientId)
-                } catch (ex: Exception) {
-                    "selection failed (" + (ex.message ?: "error") + ")"
-                }
-            } else {
-                plexDiag = "no part id in stream url"
-            }
-        }
-        val req = Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey, plainStreams)
-        if (server.type == ServerType.PLEX && req.transcoded) {
-            // ask the transcoder for its decision first (as the official apps do), and keep the answer for the track menu
-            val dec = try {
-                PlexApi.decision(server, req.uri, store.clientId)
-            } catch (ex: Exception) {
-                "decision check failed | " + (ex.message ?: "error")
-            }
-            plexDiag = if (plexDiag.isEmpty()) dec else plexDiag + " | " + dec
-        }
-        Prepared(req, info)
+        Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
     }
 
     // ---- servers -------------------------------------------------------------------------------
@@ -368,6 +338,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val list = _servers.value.filter { it.id != s.id } + s
         _servers.value = list
         store.saveServers(list)
+    }
+
+    /** Switches a server on or off without removing it (e.g. Plex off while away from home). */
+    fun setServerEnabled(id: String, on: Boolean) {
+        val list = _servers.value.map { if (it.id == id) it.copy(enabled = on) else it }
+        _servers.value = list
+        store.saveServers(list)
+        viewModelScope.launch(Dispatchers.IO) {
+            val ids = list.filter { it.enabled }.map { it.id }.toSet()
+            val keep = _entries.value.filter { it.serverId in ids }
+            _entries.value = keep
+            store.saveEntries(keep)
+            rebuild(retune = true)
+            // sync again so titles that were hidden as duplicates of the other server come back
+            refreshInternal()
+        }
     }
 
     fun removeServer(id: String) {

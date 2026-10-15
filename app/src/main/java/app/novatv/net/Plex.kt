@@ -167,9 +167,6 @@ object PlexApi {
     fun fetch(s: Server, clientId: String): List<MediaEntry> {
         val h = headers(s.token, clientId)
         val tokenQ = "X-Plex-Token=${Http.enc(s.token)}"
-        // the raw-file request identifies the client the same way the transcoder request does
-        val fileQ = tokenQ + "&X-Plex-Client-Identifier=" + Http.enc(clientId) +
-            "&X-Plex-Product=BenditTV&X-Plex-Platform=Android&X-Plex-Version=1.0"
         val sections = JSONObject(Http.get("${s.baseUrl}/library/sections", h))
             .getJSONObject("MediaContainer").optJSONArray("Directory").objs()
 
@@ -198,7 +195,7 @@ object PlexApi {
                                 year = m.optInt("year", 0),
                                 durationMs = m.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$fileQ",
+                                streamUrl = "${s.baseUrl}$part?$tokenQ",
                                 overview = m.optString("summary", "").take(420),
                                 rating = bestRating(m),
                                 mpaa = m.optString("contentRating", "")
@@ -234,7 +231,7 @@ object PlexApi {
                                 year = e.optInt("year", 0),
                                 durationMs = e.optLong("duration", 0L),
                                 thumbUrl = if (thumb.isEmpty()) "" else "${s.baseUrl}$thumb?$tokenQ",
-                                streamUrl = "${s.baseUrl}$part?$fileQ",
+                                streamUrl = "${s.baseUrl}$part?$tokenQ",
                                 overview = e.optString("summary", "").take(420),
                                 rating = bestRating(e),
                                 mpaa = e.optString("contentRating", "")
@@ -245,80 +242,6 @@ object PlexApi {
             }
         }
         return out
-    }
-
-    /**
-     * Plex's transcoder takes the audio / subtitle choice from the part's saved selection (the same call Plex Web makes),
-     * so set it before the transcode session starts. [subKey] null = no subtitles.
-     */
-    fun selectStreams(s: Server, itemId: String, partId: String, audioKey: String?, subKey: String?, clientId: String): String {
-        val q = StringBuilder("${s.baseUrl}/library/parts/$partId?allParts=1")
-        if (audioKey != null) q.append("&audioStreamID=").append(Http.enc(audioKey))
-        q.append("&subtitleStreamID=").append(Http.enc(subKey ?: "0"))
-        q.append("&X-Plex-Token=").append(Http.enc(s.token))
-        try {
-            Http.put(q.toString(), headers(s.token, clientId))
-        } catch (ex: Exception) {
-            return "selection NOT sent | " + (ex.message ?: "error")
-        }
-        // read it back so a refusal is visible instead of silent
-        return try {
-            val root = JSONObject(Http.get("${s.baseUrl}/library/metadata/$itemId", headers(s.token, clientId)))
-            val md = root.getJSONObject("MediaContainer").optJSONArray("Metadata").objs().firstOrNull()
-            val part = md?.optJSONArray("Media").objs().firstOrNull()?.optJSONArray("Part").objs().firstOrNull()
-            var selA: String? = null
-            var selS: String? = null
-            val langs = HashMap<String, String>()
-            for (st in part?.optJSONArray("Stream").objs()) {
-                langs[st.optInt("id", -1).toString()] = st.optString("languageCode", st.optString("language", ""))
-                if (!st.optBoolean("selected", false)) continue
-                when (st.optInt("streamType", 0)) {
-                    2 -> selA = st.optInt("id", -1).toString()
-                    3 -> selS = st.optInt("id", -1).toString()
-                }
-            }
-            val okA = audioKey == null || selA == audioKey
-            val okS = if (subKey == null) selS == null else selS == subKey
-            if (okA && okS) "selection saved OK | audio $audioKey ${langs[audioKey ?: ""] ?: ""}  sub ${subKey ?: "off"} ${langs[subKey ?: ""] ?: ""}"
-            else "server kept other | has audio $selA  sub ${selS ?: "off"} | wanted audio $audioKey  sub ${subKey ?: "off"}"
-        } catch (ex: Exception) {
-            "selection sent (not verified)"
-        }
-    }
-
-    /** The transcode jobs the server is running right now (a raw HLS transcode is not listed in /status/sessions). */
-    fun sessionInfo(s: Server, clientId: String): String {
-        val root = JSONObject(Http.get("${s.baseUrl}/transcode/sessions", headers(s.token, clientId)))
-        val list = root.getJSONObject("MediaContainer").optJSONArray("TranscodeSession").objs()
-        if (list.isEmpty()) return "no transcode running on the server"
-        val ts = list.last()
-        return "server transcode: audio " + ts.optString("audioDecision", "?") + " " + ts.optString("audioCodec", "") +
-            " | sub " + ts.optString("subtitleDecision", "none") +
-            " | video " + ts.optString("videoDecision", "?") + " " + ts.optString("videoCodec", "")
-    }
-
-    /**
-     * Asks the transcoder what it will do with each stream for exactly this request (what the official clients do before
-     * starting) - and shows the selected audio / subtitle with the server's decision (copy / transcode / burn).
-     */
-    fun decision(s: Server, startUrl: String, clientId: String): String {
-        val url = startUrl.replace("/transcode/universal/start.m3u8?", "/transcode/universal/decision?")
-        val root = JSONObject(Http.get(url, headers(s.token, clientId)))
-        val mc = root.getJSONObject("MediaContainer")
-        val md = mc.optJSONArray("Metadata").objs().firstOrNull()
-        val part = md?.optJSONArray("Media").objs().firstOrNull()?.optJSONArray("Part").objs().firstOrNull()
-        var a = "audio ?"
-        var sub = "sub off"
-        for (st in part?.optJSONArray("Stream").objs()) {
-            if (!st.optBoolean("selected", false)) continue
-            val tag = (st.optInt("id", -1).toString() + " " + st.optString("languageCode", "") + " " + st.optString("decision", "")).trim()
-            when (st.optInt("streamType", 0)) {
-                2 -> a = "audio $tag"
-                3 -> sub = "sub $tag"
-            }
-        }
-        val g = mc.optString("generalDecisionText", mc.optString("transcodeDecisionText", ""))
-        return "decision: $a | $sub" + (if (g.isEmpty()) "" else " | $g")
     }
 }
 
@@ -352,6 +275,7 @@ object PlexAuth {
         val o = JSONObject(Http.get("$PLEX_TV/api/v2/pins/${pin.id}?code=${pin.code}", h(clientId)))
         return if (o.isNull("authToken")) null else o.getString("authToken")
     }
+
     /** Finds every Plex server the account can reach and picks a working address for each. */
     fun discoverServers(token: String, clientId: String): List<Server> {
         val arr = JSONArray(Http.get("$PLEX_TV/api/v2/resources?includeHttps=1&includeRelay=1", h(clientId, token)))

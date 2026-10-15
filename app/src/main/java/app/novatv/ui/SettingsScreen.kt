@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -78,6 +80,8 @@ private fun serverColor(t: ServerType): Color = when (t) {
 
 @Composable
 private fun ScreenFrame(content: @Composable () -> Unit) {
+    // phones held sideways are much narrower than a TV: tighter margins
+    val compact = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1000
     Box(
         Modifier
             .fillMaxSize()
@@ -86,8 +90,9 @@ private fun ScreenFrame(content: @Composable () -> Unit) {
         Column(
             Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 72.dp, vertical = 40.dp),
+                .padding(horizontal = if (compact) 24.dp else 72.dp, vertical = if (compact) 16.dp else 40.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             content()
@@ -148,7 +153,16 @@ fun SettingsScreen(vm: AppViewModel) {
         if (servers.isEmpty()) {
             Text("No servers connected yet. Add Plex, Jellyfin or Emby to build your channels.", color = Nova.textDim, fontSize = 15.sp)
         }
-        servers.forEach { s -> ServerRow(s) { vm.removeServer(s.id) } }
+        servers.forEach { s ->
+            ServerRow(s, onToggle = { vm.setServerEnabled(s.id, !s.enabled) }, onRemove = { vm.removeServer(s.id) })
+        }
+        if (servers.size > 1) {
+            Text(
+                "Switch a server OFF to ignore it without removing it - e.g. Plex while you are away from home. Titles that exist on several servers are taken from the first server that is ON.",
+                color = Nova.textDim,
+                fontSize = 13.sp
+            )
+        }
         NeonButton("+  ADD SERVER", onClick = { vm.openAddServer() }, focusRequester = first)
 
         SectionLabel("CHANNELS")
@@ -278,7 +292,7 @@ fun SettingsScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun ServerRow(s: Server, onRemove: () -> Unit) {
+private fun ServerRow(s: Server, onToggle: () -> Unit, onRemove: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     val c = serverColor(s.type)
     Row(
@@ -286,7 +300,8 @@ private fun ServerRow(s: Server, onRemove: () -> Unit) {
             .fillMaxWidth()
             .clip(shape)
             .background(Nova.panel)
-            .border(1.dp, c.copy(alpha = 0.35f), shape)
+            .border(1.dp, c.copy(alpha = if (s.enabled) 0.35f else 0.12f), shape)
+            .alpha(if (s.enabled) 1f else 0.55f)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -303,6 +318,13 @@ private fun ServerRow(s: Server, onRemove: () -> Unit) {
             Text(s.name, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(s.baseUrl, color = Nova.textDim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        NeonButton(
+            if (s.enabled) "ON" else "OFF",
+            onClick = onToggle,
+            accent = if (s.enabled) Color(0xFF52B54B) else Nova.textDim,
+            selected = s.enabled
+        )
+        Spacer(Modifier.width(10.dp))
         NeonButton("REMOVE", onClick = onRemove, accent = Nova.danger)
     }
 }

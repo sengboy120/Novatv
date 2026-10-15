@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -114,6 +117,7 @@ fun TrackMenu(
         Modifier
             .fillMaxHeight()
             .width(270.dp)
+            .swallowTouch()
             .clip(edge)
             .background(Color(0xF2090910))
             .border(1.dp, Brush.verticalGradient(listOf(Color(0x552AF5FF), Color(0x55FF5CD6))), edge)
@@ -125,10 +129,15 @@ fun TrackMenu(
                 .padding(start = 12.dp, end = 8.dp, top = 18.dp, bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                "AUDIO & SUBTITLES",
-                style = TextStyle(brush = Nova.neon, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "AUDIO & SUBTITLES",
+                    style = TextStyle(brush = Nova.neon, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 2.sp),
+                    modifier = Modifier.weight(1f)
+                )
+                // touch: close the panel (the remote uses BACK)
+                StepBtn("✕", onClick = onClose)
+            }
             if (formatLines.isNotEmpty()) FormatCard(formatLines)
             if (transcoded) {
                 Text(
@@ -177,6 +186,23 @@ private fun fmtDelay(ms: Long): String {
     val sign = if (ms > 0L) "+" else if (ms < 0L) "−" else ""
     val v = Math.abs(ms) / 1000.0
     return sign + String.format(java.util.Locale.US, "%.1f", v) + " s"
+}
+
+/** A small round touch button (not a focus target, so the D-pad is unaffected). */
+@Composable
+private fun StepBtn(text: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(shape)
+            .background(Color(0x33FFFFFF))
+            .border(1.dp, Color(0x552AF5FF), shape)
+            .tapOnly(onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    }
 }
 
 @Composable
@@ -314,12 +340,22 @@ private fun AdjustRow(
                 fontSize = 15.sp,
                 modifier = Modifier.weight(1f)
             )
+            if (enabled) {
+                StepBtn("−", onClick = { onStep(-1, false) })
+                Spacer(Modifier.width(6.dp))
+            }
             Text(
                 if (enabled) value else "—",
                 color = if (enabled) Nova.violet else Nova.textDim,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = if (enabled) Modifier.width(58.dp) else Modifier
             )
+            if (enabled) {
+                Spacer(Modifier.width(6.dp))
+                StepBtn("+", onClick = { onStep(1, false) })
+            }
         }
         if (focused && enabled) {
             Text(hint, color = Nova.textDim, fontSize = 11.sp, letterSpacing = 1.sp)
@@ -402,17 +438,24 @@ fun ControlBar(
     totalMs: Long,
     endClockMs: Long,
     infoLines: List<Pair<String, String>>?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onActivate: (Int) -> Unit = {},
+    onChannel: (Int) -> Unit = {}
 ) {
     val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
+    val ctx = LocalContext.current
+    val touch = remember { !Device.isTv(ctx) }
+    // narrow screens (a phone held sideways): icon-only buttons, smaller title, no "up next"
+    val narrow = touch && LocalConfiguration.current.screenWidthDp < 1000
+    val btnScroll = rememberScrollState()
     Box(
         modifier
             .fillMaxWidth()
             .background(
                 Brush.verticalGradient(listOf(Color(0x0008080D), Color(0xE608080D), Color(0xF508080D)))
             )
-            .padding(horizontal = 44.dp)
-            .padding(top = 54.dp, bottom = 22.dp)
+            .padding(horizontal = if (touch) 24.dp else 44.dp)
+            .padding(top = if (touch) 40.dp else 54.dp, bottom = if (touch) 12.dp else 22.dp)
     ) {
         Column {
             if (infoLines != null) {
@@ -420,7 +463,7 @@ fun ControlBar(
                 Spacer(Modifier.height(14.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChannelBadge(ch.iconKey, size = 56.dp, chId = ch.id)
+                ChannelBadge(ch.iconKey, size = if (narrow) 44.dp else 56.dp, chId = ch.id)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -438,7 +481,7 @@ fun ControlBar(
                     Text(
                         entry.displayTitle,
                         color = Color.White,
-                        fontSize = 28.sp,
+                        fontSize = if (narrow) 21.sp else 28.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -448,7 +491,7 @@ fun ControlBar(
                         Text(sub, color = Nova.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                if (next != null) {
+                if (next != null && !narrow) {
                     Spacer(Modifier.width(20.dp))
                     Column(Modifier.width(230.dp)) {
                         Text("UP NEXT · ${fmtTime(next.startMs)}", color = acc.c2, fontSize = 11.sp, letterSpacing = 2.sp)
@@ -490,14 +533,26 @@ fun ControlBar(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(
+                (if (touch) Modifier.horizontalScroll(btnScroll) else Modifier),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Ctl.values().forEachIndexed { i, c ->
                     val label = when (c) {
                         Ctl.PLAY_PAUSE -> if (paused) "Play" else "Pause"
                         Ctl.LIVE -> if (live && !paused) "Live" else "Go Live"
                         else -> c.label
                     }
-                    CtlButton(c, paused, label, i == selected, c == Ctl.LIVE && live && !paused, acc.c1)
+                    CtlButton(
+                        c, paused, if (narrow) "" else label, i == selected,
+                        c == Ctl.LIVE && live && !paused, acc.c1,
+                        touch = touch, onClick = { onActivate(i) }
+                    )
+                }
+                if (touch) {
+                    TextBtn("CH −", acc.c1) { onChannel(-1) }
+                    TextBtn("CH +", acc.c1) { onChannel(1) }
                 }
             }
         }
@@ -540,7 +595,16 @@ private fun StatusChip(live: Boolean, paused: Boolean, transcoded: Boolean) {
 }
 
 @Composable
-private fun CtlButton(ctl: Ctl, paused: Boolean, label: String, focused: Boolean, dim: Boolean, accent: Color) {
+private fun CtlButton(
+    ctl: Ctl,
+    paused: Boolean,
+    label: String,
+    focused: Boolean,
+    dim: Boolean,
+    accent: Color,
+    touch: Boolean = false,
+    onClick: () -> Unit = {}
+) {
     val shape = RoundedCornerShape(50)
     val fg = if (focused) Color(0xFF0B0F24) else if (dim) Nova.textDim else Color.White
     Row(
@@ -549,12 +613,32 @@ private fun CtlButton(ctl: Ctl, paused: Boolean, label: String, focused: Boolean
             .clip(shape)
             .background(if (focused) tint(Color.White, accent, 0.25f) else Color(0xB3191922))
             .border(1.dp, if (focused) accent else accent.copy(alpha = 0.3f), shape)
-            .padding(horizontal = 13.dp, vertical = 8.dp),
+            .tapOnly(onClick)
+            .padding(horizontal = if (label.isEmpty()) 14.dp else 13.dp, vertical = if (touch) 12.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         CtlIcon(ctl, paused, fg)
-        Spacer(Modifier.width(7.dp))
-        Text(label, color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        if (label.isNotEmpty()) {
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = fg, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
+/** Text-only touch button (channel down / up). */
+@Composable
+private fun TextBtn(text: String, accent: Color, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(Color(0xB3191922))
+            .border(1.dp, accent.copy(alpha = 0.5f), shape)
+            .tapOnly(onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -667,7 +751,8 @@ fun SurfPanel(
     selected: Int,
     nowMs: Long,
     currentId: String?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onPick: (Int) -> Unit = {}
 ) {
     val n = channels.size
     if (n == 0) return
@@ -691,13 +776,13 @@ fun SurfPanel(
             val ch = channels[idx]
             val p = Scheduler.programAt(ch, nowMs)
             if (off == 0) {
-                SurfSelected(ch, p, nowMs, ch.id == currentId)
+                SurfSelected(ch, p, nowMs, ch.id == currentId, Modifier.tapOnly { onPick(idx) })
             } else {
-                SurfRow(ch, p, if (off < 0) "▲" else "▼")
+                SurfRow(ch, p, if (off < 0) "▲" else "▼", Modifier.tapOnly { onPick(idx) })
             }
         }
         Text(
-            "▲▼ browse   OK tune   BACK close",
+            "▲▼ browse   OK tune   BACK close   (touch: tap a channel)",
             color = Nova.textDim,
             fontSize = 11.sp,
             letterSpacing = 1.sp,
@@ -707,11 +792,11 @@ fun SurfPanel(
 }
 
 @Composable
-private fun SurfRow(ch: Channel, p: Program?, arrow: String) {
+private fun SurfRow(ch: Channel, p: Program?, arrow: String, tapMod: Modifier = Modifier) {
     Row(
-        Modifier
+        tapMod
             .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(arrow, color = Nova.textDim, fontSize = 11.sp, modifier = Modifier.width(18.dp))
@@ -740,12 +825,12 @@ private fun SurfRow(ch: Channel, p: Program?, arrow: String) {
 }
 
 @Composable
-private fun SurfSelected(ch: Channel, p: Program?, nowMs: Long, isCurrent: Boolean) {
+private fun SurfSelected(ch: Channel, p: Program?, nowMs: Long, isCurrent: Boolean, tapMod: Modifier = Modifier) {
     val acc = remember(ch.iconKey) { accentOf(ch.iconKey) }
     val shape = RoundedCornerShape(16.dp)
     val next = if (p != null) Scheduler.upcoming(ch, nowMs, 12 * 3_600_000L, 2).getOrNull(1) else null
     Column(
-        Modifier
+        tapMod
             .fillMaxWidth()
             .clip(shape)
             .background(tint(Nova.panelHi, acc.c1, 0.22f))
@@ -849,7 +934,7 @@ fun EmptyState(busy: Boolean, status: String, modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            if (status.isNotEmpty()) status else "Press OK to open Settings and connect Plex, Jellyfin or Emby",
+            if (status.isNotEmpty()) status else "Press OK (or tap the screen) to open Settings and connect Plex, Jellyfin or Emby",
             color = Nova.textDim,
             fontSize = 15.sp
         )

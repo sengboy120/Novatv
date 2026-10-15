@@ -6,6 +6,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -76,10 +79,21 @@ import java.util.TimeZone
 
 /** Sizes shared between the guide and the player (which shrinks the video into the preview window). */
 object GuideMetrics {
-    val previewW = 272.dp
-    val previewH = 153.dp
-    val previewTop = 54.dp
-    val previewEnd = 32.dp
+    var previewW = 272.dp
+    var previewH = 153.dp
+    var previewTop = 54.dp
+    var previewEnd = 32.dp
+
+    /** Short screens (a phone held sideways) get a smaller preview window so more channel rows fit. */
+    fun applyFor(screenHeightDp: Int) {
+        if (screenHeightDp < 520) {
+            previewW = 176.dp
+            previewH = 99.dp
+        } else {
+            previewW = 272.dp
+            previewH = 153.dp
+        }
+    }
 
     val sideW = 190.dp
     val rowH = 44.dp
@@ -112,6 +126,7 @@ fun GuideOverlay(
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val isTv = remember { Device.isTv(LocalContext.current) }
     // one focus handle per channel row: it is attached to that row's programme that is on air right now
     val liveRequesters = remember { HashMap<String, FocusRequester>() }
     val curIdx = channels.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
@@ -311,6 +326,21 @@ fun GuideOverlay(
                 Box(Modifier.onFocusChanged { if (it.hasFocus) zone = 2 }) {
                     NeonButton("SETTINGS", onClick = onSettings, accent = Nova.violet, compact = true)
                 }
+                if (!isTv) {
+                    // touch: close the guide (the remote uses BACK); not a focus target
+                    Spacer(Modifier.width(10.dp))
+                    val closeShape = RoundedCornerShape(50)
+                    Box(
+                        Modifier
+                            .clip(closeShape)
+                            .background(Nova.panel)
+                            .border(1.dp, Nova.magenta.copy(alpha = 0.6f), closeShape)
+                            .tapOnly(onClose)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text("✕  CLOSE", color = Nova.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+                    }
+                }
             }
             Spacer(Modifier.height(2.dp))
 
@@ -330,6 +360,15 @@ fun GuideOverlay(
                 Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    // touch: drag sideways to move along the timeline
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures { change, dx ->
+                            change.consume()
+                            val v = (scrollTarget - dx / density).coerceIn(0f, maxScroll)
+                            scrollTarget = v
+                            scope.launch { scroll.snapTo(v) }
+                        }
+                    }
             ) {
                 Column(Modifier.fillMaxSize()) {
                     Ruler(winStart, nowMs, focusEnd, accent.c1, scroll)

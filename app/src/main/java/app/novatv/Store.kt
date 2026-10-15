@@ -1,12 +1,16 @@
 package app.novatv
 
 import android.content.Context
+import app.novatv.ui.Device
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /** Persists servers, settings and a cached copy of the library so the app starts instantly. */
 class Store(context: Context) {
+
+    /** Phones / tablets / car units start in SMART mode at 8 Mbps (TV keeps DIRECT PLAY at 12 Mbps). */
+    private val tv = Device.isTv(context)
 
     private val prefs = context.getSharedPreferences("novatv", Context.MODE_PRIVATE)
     private val cacheFile = File(context.filesDir, "library.json")
@@ -25,7 +29,8 @@ class Store(context: Context) {
                     name = o.getString("name"),
                     baseUrl = o.getString("baseUrl"),
                     token = o.getString("token"),
-                    userId = o.optString("userId", "")
+                    userId = o.optString("userId", ""),
+                    enabled = o.optBoolean("enabled", true)
                 )
             }
         } catch (e: Exception) {
@@ -44,6 +49,7 @@ class Store(context: Context) {
                     .put("baseUrl", s.baseUrl)
                     .put("token", s.token)
                     .put("userId", s.userId)
+                    .put("enabled", s.enabled)
             )
         }
         prefs.edit().putString("servers", arr.toString()).apply()
@@ -69,11 +75,12 @@ class Store(context: Context) {
 
     fun loadPlayback(): PlaybackSettings = PlaybackSettings(
         mode = try {
-            PlayMode.valueOf(prefs.getString("playMode", PlayMode.DIRECT.name) ?: PlayMode.DIRECT.name)
+            val def = if (tv) PlayMode.DIRECT else PlayMode.SMART
+            PlayMode.valueOf(prefs.getString("playMode", def.name) ?: def.name)
         } catch (e: Exception) {
             PlayMode.DIRECT
         },
-        maxMbps = prefs.getInt("maxMbps", 12),
+        maxMbps = prefs.getInt("maxMbps", if (tv) 12 else 8),
         subLang = prefs.getString("subLang", "") ?: "",
         audioLang = prefs.getString("audioLang", "") ?: "",
         subPos = prefs.getInt("subPos", 8),
@@ -93,19 +100,6 @@ class Store(context: Context) {
             .putInt("subPos", p.subPos)
             .putString("dtsMode", p.dtsMode.name)
             .apply()
-    }
-
-    /** Servers that answered 401/403 to a direct file request: use the server's own streaming for them. */
-    fun noDirectServers(): Set<String> = prefs.getStringSet("noDirectServers", emptySet())?.toSet() ?: emptySet()
-
-    fun setNoDirect(serverId: String, on: Boolean) {
-        val s = noDirectServers().toMutableSet()
-        if (on) s.add(serverId) else s.remove(serverId)
-        prefs.edit().putStringSet("noDirectServers", s).apply()
-    }
-
-    fun clearNoDirect() {
-        prefs.edit().remove("noDirectServers").apply()
     }
 
     var lastChannelId: String?

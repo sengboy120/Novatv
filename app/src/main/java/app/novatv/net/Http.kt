@@ -3,7 +3,6 @@ package app.novatv.net
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -38,14 +37,6 @@ object Http {
             val text = r.body?.string() ?: ""
             if (!r.isSuccessful) throw IOException("HTTP ${r.code} from ${url.substringBefore('?')}")
             text
-        }
-    }
-
-    fun put(url: String, headers: Map<String, String> = emptyMap()) {
-        val b = Request.Builder().url(url).put(ByteArray(0).toRequestBody(null))
-        headers.forEach { (k, v) -> b.header(k, v) }
-        client.newCall(b.build()).execute().use { r ->
-            if (!r.isSuccessful) throw IOException("HTTP ${r.code} from ${url.substringBefore('?')}")
         }
     }
 
