@@ -52,7 +52,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.audio.AudioCapabilities
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
@@ -161,6 +163,8 @@ fun PlayerScreen(vm: AppViewModel) {
     // audio / subtitle state
     var curInfo by remember { mutableStateOf<StreamsInfo?>(null) }
     var curTranscoded by remember { mutableStateOf(false) }
+    // true when the current stream is a Jellyfin / Emby transcode (text subtitles are drawn by the app, not burned in)
+    var curSoft by remember { mutableStateOf(false) }
     var audioKey by remember { mutableStateOf<String?>(null) }
     var subKey by remember { mutableStateOf<String?>(null) }
     var exoTracks by remember { mutableStateOf(Tracks.EMPTY) }
@@ -209,7 +213,14 @@ fun PlayerScreen(vm: AppViewModel) {
                     .build()
             }
         }
-        ExoPlayer.Builder(ctx, rf).build()
+        // patient network settings: a server transcode (or a far-away server) can take a while to answer
+        val http = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(30_000)
+            .setReadTimeoutMs(60_000)
+            .setAllowCrossProtocolRedirects(true)
+        ExoPlayer.Builder(ctx, rf)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(ctx).setDataSourceFactory(http))
+            .build()
     }
 
     DisposableEffect(exo) {
@@ -299,7 +310,7 @@ fun PlayerScreen(vm: AppViewModel) {
         if (k == null) null else info.subs.firstOrNull { it.key == k }
     }
     val effAudioKey: String? = if (info == null) null else (audioKey ?: Streams.pickAudio(info, playback.audioLang))
-    val wantOwn = !curTranscoded && effSub != null && effSub.isText && effSub.sidecarUrl.isNotEmpty()
+    val wantOwn = (!curTranscoded || curSoft) && effSub != null && effSub.isText && effSub.sidecarUrl.isNotEmpty()
     val ownActive = wantOwn && ownReady
 
     // ---- tune to whatever the schedule says is on air right now ----------------------------------
@@ -348,6 +359,7 @@ fun PlayerScreen(vm: AppViewModel) {
         curInfo = prep.info
         AudioHints.dtsHd = dtsHdOf(prep.info, audioKey ?: Streams.pickAudio(prep.info, playback.audioLang))
         curTranscoded = prep.req.transcoded
+        curSoft = prep.req.softCapable
         // Plex HLS starts at the requested offset, so the player's own clock begins at 0 there.
         posBaseMs = if (prep.req.transcoded && prep.req.startMs == 0L) startAt else 0L
 
@@ -366,12 +378,12 @@ fun PlayerScreen(vm: AppViewModel) {
     }
 
     // ---- text subtitles: fetch + parse so we can draw (and shift) them ---------------------------
-    LaunchedEffect(playingId, curInfo, effSub?.key, curTranscoded) {
+    LaunchedEffect(playingId, curInfo, effSub?.key, curTranscoded, curSoft) {
         cues = emptyList()
         ownReady = false
         ownFailed = false
         val st = effSub
-        if (curTranscoded || st == null || !st.isText || st.sidecarUrl.isEmpty()) return@LaunchedEffect
+        if ((curTranscoded && !curSoft) || st == null || !st.isText || st.sidecarUrl.isEmpty()) return@LaunchedEffect
         val loaded: List<Cue> = withContext(Dispatchers.IO) {
             try {
                 SubParser.parse(Http.get(st.sidecarUrl))
@@ -383,7 +395,7 @@ fun PlayerScreen(vm: AppViewModel) {
         }
         if (loaded.isEmpty()) {
             ownFailed = true
-            if (st.external) playError = "Couldn't load this subtitle file"
+            if (st.external || curTranscoded) playError = "Couldn't load this subtitle file"
         } else {
             cues = loaded
             ownReady = true
@@ -698,6 +710,14 @@ fun PlayerScreen(vm: AppViewModel) {
         }
     }
 
+    /** In a transcode: does switching to [st] (null = off) need a new stream (burn-in added / removed)? */
+    fun subNeedsRestart(st: StreamInfo?): Boolean {
+        if (!curTranscoded) return false
+        val newSoft = curSoft && st != null && st.isText && st.sidecarUrl.isNotEmpty()
+        val nowBurned = effSub != null && !wantOwn
+        return nowBurned || (st != null && !newSoft)
+    }
+
     // ---- audio / subtitle menu content --------------------------------------------------------------
     val subRows = ArrayList<TrackRowData>()
     val audioRows = ArrayList<TrackRowData>()
@@ -718,7 +738,7 @@ fun PlayerScreen(vm: AppViewModel) {
             TrackRowData("Off", "", subOff) {
                 subKey = ""
                 vm.rememberLang(TrackKind.SUBTITLE, "")
-                if (curTranscoded) vm.retune()
+                if (subNeedsRestart(null)) vm.retune()
             }
         )
         if (info != null) {
@@ -734,7 +754,7 @@ fun PlayerScreen(vm: AppViewModel) {
                         subKey = st.key
                         val c = Langs.canon(st.lang)
                         if (c.isNotEmpty()) vm.rememberLang(TrackKind.SUBTITLE, c)
-                        if (curTranscoded) vm.retune()
+                        if (subNeedsRestart(st)) vm.retune()
                     }
                 )
             }
@@ -792,7 +812,7 @@ fun PlayerScreen(vm: AppViewModel) {
     val nativeTextFallback = !curTranscoded && effSub != null && effSub.isText && ownFailed
     val loadingSub = wantOwn && !ownReady && !ownFailed
     val adjustNote = when {
-        curTranscoded -> "Subtitles are burned into the video by the server, so position and delay can't be changed."
+        curTranscoded && effSub != null && !wantOwn -> "This subtitle is burned into the video by the server, so position and delay can't be changed."
         effSub == null -> "Select a subtitle to adjust its position and delay."
         loadingSub -> "Loading subtitle…"
         ownActive -> "Position and delay apply to this text subtitle."
@@ -838,7 +858,7 @@ fun PlayerScreen(vm: AppViewModel) {
         lines.add(
             Pair(
                 "SUBTITLES",
-                if (effSub != null) Labels.subLabel(effSub) + (if (curTranscoded) "  ·  burned in" else "") else "Off"
+                if (effSub != null) Labels.subLabel(effSub) + (if (curTranscoded && !wantOwn) "  ·  burned in" else "") else "Off"
             )
         )
         lines.add(

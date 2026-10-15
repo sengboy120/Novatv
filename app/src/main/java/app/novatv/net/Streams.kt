@@ -220,6 +220,10 @@ object Streams {
             else -> subKey
         }
         val always = p.mode == PlayMode.TRANSCODE
+        // text subtitles are drawn by the app (not burned in) when the server can hand us the subtitle file
+        val softSub = sKey != null && (info?.subs?.firstOrNull { it.key == sKey }?.let {
+            it.isText && it.sidecarUrl.isNotEmpty()
+        } ?: false)
 
         return if (s.type == ServerType.PLEX) {
             val sb = StringBuilder("${s.baseUrl}/video/:/transcode/universal/start.m3u8?")
@@ -253,9 +257,9 @@ object Streams {
                 sb.append("&AllowVideoStreamCopy=false&AllowAudioStreamCopy=false&EnableAutoStreamCopy=false")
             }
             if (aKey != null) sb.append("&AudioStreamIndex=").append(aKey)
-            if (sKey != null) sb.append("&SubtitleStreamIndex=").append(sKey).append("&SubtitleMethod=Encode")
+            if (sKey != null && !softSub) sb.append("&SubtitleStreamIndex=").append(sKey).append("&SubtitleMethod=Encode")
             sb.append("&api_key=").append(Http.enc(s.token))
-            PlayRequest(sb.toString(), "application/x-mpegURL", emptyList(), offsetMs, true)
+            PlayRequest(sb.toString(), "application/x-mpegURL", emptyList(), offsetMs, true, softCapable = true)
         }
     }
 }

@@ -195,7 +195,12 @@ class PlayRequest(
     val mime: String?,
     val sidecars: List<StreamInfo>,
     val startMs: Long,
-    val transcoded: Boolean
+    val transcoded: Boolean,
+    /**
+     * Jellyfin / Emby transcode that does NOT burn text subtitles into the picture: the app draws them itself
+     * (sharp at any size, position / delay adjustable, and the server has less to do).
+     */
+    val softCapable: Boolean = false
 )
 
 class Prepared(val req: PlayRequest, val info: StreamsInfo?)
