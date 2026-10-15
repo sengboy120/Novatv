@@ -126,7 +126,8 @@ fun GuideOverlay(
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val isTv = remember { Device.isTv(LocalContext.current) }
+    val guideCtx = LocalContext.current
+    val isTv = remember { Device.isTv(guideCtx) }
     // one focus handle per channel row: it is attached to that row's programme that is on air right now
     val liveRequesters = remember { HashMap<String, FocusRequester>() }
     val curIdx = channels.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
