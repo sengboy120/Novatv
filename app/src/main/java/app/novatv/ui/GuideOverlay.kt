@@ -95,8 +95,8 @@ object GuideMetrics {
         }
     }
 
-    val sideW = 190.dp
-    val rowH = 44.dp
+    val sideW = 212.dp
+    val rowH = 50.dp
     val gutter = 8.dp
 
     /** Timeline scale: 4 dp per minute -> a 90 minute movie is 360 dp wide. */
@@ -598,7 +598,7 @@ private fun ChannelCell(
             style = TextStyle(brush = acc.brush, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold),
             modifier = Modifier.width(30.dp)
         )
-        ChannelBadge(ch.iconKey, size = 32.dp, chId = ch.id)
+        ChannelBadge(ch.iconKey, size = 42.dp, chId = ch.id)
         Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -747,13 +747,32 @@ private fun ProgramBlock(
 
 @Composable
 private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accent, modifier: Modifier) {
+    Box(modifier) {
+        DetailText(detail, nowMs, acc, Modifier.fillMaxSize())
+        // the channel's logo sits in the top right corner of the panel
+        val ch = detail?.first
+        if (ch != null) {
+            ChannelBadge(
+                ch.iconKey,
+                size = 56.dp,
+                chId = ch.id,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 10.dp, end = 12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DetailText(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accent, modifier: Modifier) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier
             .clip(shape)
             .background(tint(Color(0xE60C0C13), acc.c1, 0.09f))
             .border(1.dp, acc.c1.copy(alpha = 0.55f), shape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(start = 14.dp, end = if (detail != null) 82.dp else 14.dp, top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.Center
     ) {
         if (detail == null) {

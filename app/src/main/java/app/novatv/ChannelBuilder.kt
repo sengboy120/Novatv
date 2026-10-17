@@ -79,7 +79,9 @@ object RealChannels {
         RealChannel("sony", "Sony", "SONY", 0xFFE0E6F5, 0xFF6BA8FF, listOf("sony", "columbia", "screengems")),
         RealChannel("netflix", "Netflix", "Netflix", 0xFFFF4D5E, 0xFFFF2D55, listOf("netflix")),
         RealChannel("apple", "Apple TV+", "Apple TV+", 0xFFD0D6E0, 0xFF8E9AC4, listOf("apple")),
-        RealChannel("prime", "Prime Video", "Prime", 0xFF33C8FF, 0xFF2AF5C8, listOf("amazon", "primevideo", "mgm")),
+        RealChannel("prime", "Prime Video", "Prime", 0xFF33C8FF, 0xFF2AF5C8, listOf("amazon", "primevideo")),
+        RealChannel("lionsgate", "Lionsgate", "LIONS", 0xFF8AB4F8, 0xFFB388FF, listOf("lionsgate", "summitentertainment")),
+        RealChannel("mgm", "MGM", "MGM", 0xFFFFC857, 0xFFD4A017, listOf("mgm", "metrogoldwyn", "unitedartists")),
         RealChannel("showtime", "Showtime", "Showtime", 0xFFFF3355, 0xFFFF7A3D, listOf("showtime")),
         RealChannel("amc", "AMC", "AMC", 0xFF4DFF9A, 0xFF2AB8FF, listOf("amc")),
         RealChannel("starz", "Starz", "Starz", 0xFFFFD93D, 0xFFFF8A3D, listOf("starz")),
@@ -167,7 +169,9 @@ object ChannelBuilder {
         val eps = usable.filter { it.kind == EntryKind.EPISODE }
 
         val specs = ArrayList<Spec>()
-        if (usable.isNotEmpty()) specs.add(Spec("mix", "Nova Mix", ChannelKind.MIX, "mix", usable))
+        // "Ben latest": only films from 2025 or 2026
+        val latest = movies.filter { it.year in 2025..2026 }
+        if (latest.isNotEmpty()) specs.add(Spec("mix", "Ben latest", ChannelKind.MOVIES, "mix", latest))
         if (movies.isNotEmpty()) specs.add(Spec("movies", "All Movies", ChannelKind.MOVIES, "movies", movies))
         if (eps.isNotEmpty()) specs.add(Spec("series", "All Series", ChannelKind.SERIES, "tv", eps))
 
@@ -190,7 +194,10 @@ object ChannelBuilder {
         if (s.movieGenres) genres.addAll(genreSpecs(movies, "mg", "Movies", ChannelKind.MOVIE_GENRE, s.minItems))
         if (s.seriesGenres) genres.addAll(genreSpecs(eps, "sg", "Series", ChannelKind.SERIES_GENRE, s.minItems))
         val room = (MAX_CHANNELS - specs.size).coerceAtLeast(0)
-        val keep = genres.sortedByDescending { it.entries.size }.take(room).map { it.id }.toHashSet()
+        // the two genre channels with the fewest titles are left out
+        val bySize = genres.sortedByDescending { it.entries.size }
+        val trimmed = if (bySize.size > 2) bySize.dropLast(2) else bySize
+        val keep = trimmed.take(room).map { it.id }.toHashSet()
         specs.addAll(genres.filter { it.id in keep })
 
         return specs.take(99).mapIndexed { i, sp ->
