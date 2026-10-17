@@ -42,6 +42,9 @@ fun fmtPos(ms: Long): String {
 
 fun fmtDate(ms: Long): String = SimpleDateFormat("EEE d/M", Locale.getDefault()).format(Date(ms))
 
+/** "Thu, Oct 15" */
+fun fmtDateLong(ms: Long): String = SimpleDateFormat("EEE, MMM d", Locale.ENGLISH).format(Date(ms))
+
 /** The two colours a channel is drawn in (taken from its icon, or from its brand for real channels). */
 class Accent(val c1: Color, val c2: Color) {
     val brush: Brush = Brush.horizontalGradient(listOf(c1, c2))

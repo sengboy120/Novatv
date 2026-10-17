@@ -84,6 +84,7 @@ class Store(context: Context) {
         subLang = prefs.getString("subLang", "") ?: "",
         audioLang = prefs.getString("audioLang", "") ?: "",
         subPos = prefs.getInt("subPos", 8),
+        subSize = prefs.getInt("subSize", 100),
         dtsMode = try {
             DtsMode.valueOf(prefs.getString("dtsMode", DtsMode.PASS.name) ?: DtsMode.PASS.name)
         } catch (e: Exception) {
@@ -98,6 +99,7 @@ class Store(context: Context) {
             .putString("subLang", p.subLang)
             .putString("audioLang", p.audioLang)
             .putInt("subPos", p.subPos)
+            .putInt("subSize", p.subSize)
             .putString("dtsMode", p.dtsMode.name)
             .apply()
     }

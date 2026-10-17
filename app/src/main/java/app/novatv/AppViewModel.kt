@@ -287,6 +287,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (next != cur) updatePlayback(next)
     }
 
+    /** Video / audio details of [e] for the guide's info panel (cached; null if the server can't be reached). */
+    suspend fun streamsFor(e: MediaEntry): StreamsInfo? = withContext(Dispatchers.IO) {
+        val hit = synchronized(infoCache) { infoCache[e.id] }
+        if (hit != null) return@withContext hit
+        val server = _servers.value.firstOrNull { it.id == e.serverId } ?: return@withContext null
+        val fetched = try {
+            Streams.fetchInfo(server, e, store.clientId)
+        } catch (ex: CancellationException) {
+            throw ex
+        } catch (ex: Exception) {
+            null
+        }
+        if (fetched != null) {
+            synchronized(infoCache) {
+                if (infoCache.size > 300) infoCache.clear()
+                infoCache[e.id] = fetched
+            }
+        }
+        fetched
+    }
+
     /**
      * Works out how to play [e]: direct file, or a server-side HLS transcode, plus any
      * external subtitle files. Asks the server for the item's audio/subtitle streams first.

@@ -139,6 +139,8 @@ data class PlaybackSettings(
     val audioLang: String = "",
     /** Subtitle height: percent of the screen height between the bottom edge and the text. */
     val subPos: Int = 8,
+    /** Subtitle text size in percent of the normal size (text subtitles only). */
+    val subSize: Int = 100,
     val dtsMode: DtsMode = DtsMode.PASS
 )
 

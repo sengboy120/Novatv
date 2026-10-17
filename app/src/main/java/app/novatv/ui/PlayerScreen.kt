@@ -143,6 +143,9 @@ fun PlayerScreen(vm: AppViewModel) {
     var surfIdx by remember { mutableIntStateOf(0) }
     var infoOpen by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(false) }
+    // TV: BACK inside the guide opens a two-way choice (A back to TV / B exit the app)
+    var backAsk by remember { mutableStateOf(false) }
+    val backAskFocus = remember { FocusRequester() }
     var controlsTick by remember { mutableIntStateOf(0) }
     var ctrlIndex by remember { mutableIntStateOf(0) }
 
@@ -452,6 +455,19 @@ fun PlayerScreen(vm: AppViewModel) {
             controlsVisible = false
         }
     }
+    LaunchedEffect(guideOpen) {
+        if (!guideOpen) backAsk = false
+    }
+    LaunchedEffect(backAsk) {
+        if (backAsk) {
+            delay(120L)
+            try {
+                backAskFocus.requestFocus()
+            } catch (e: Exception) {
+                // dialog not laid out yet
+            }
+        }
+    }
     LaunchedEffect(playError) {
         if (playError != null) {
             delay(7_000L)
@@ -489,8 +505,8 @@ fun PlayerScreen(vm: AppViewModel) {
             }
         }
     }
-    LaunchedEffect(guideOpen, trackMenuOpen, exitAsk) {
-        if (!guideOpen && !trackMenuOpen && !exitAsk) {
+    LaunchedEffect(guideOpen, trackMenuOpen, exitAsk, backAsk) {
+        if (!guideOpen && !trackMenuOpen && !exitAsk && !backAsk) {
             delay(120L)
             try {
                 rootFocus.requestFocus()
@@ -673,11 +689,16 @@ fun PlayerScreen(vm: AppViewModel) {
     }
 
     BackHandler {
+        // TV: BACK in the guide asks "A: back to TV  /  B: exit app"; BACK again answers A.
         when {
             exitAsk -> exitAsk = false
+            backAsk -> {
+                backAsk = false
+                guideOpen = false
+            }
             trackMenuOpen -> trackMenuOpen = false
             surfOpen -> surfOpen = false
-            guideOpen -> guideOpen = false
+            guideOpen -> if (isTv) backAsk = true else guideOpen = false
             infoOpen -> infoOpen = false
             controlsVisible -> controlsVisible = false
             paused -> exo.playWhenReady = true
@@ -834,6 +855,13 @@ fun PlayerScreen(vm: AppViewModel) {
             subDelayMs = (subDelayMs + dir * step).coerceIn(-60_000L, 60_000L)
         },
         onDelayReset = { subDelayMs = 0L },
+        sizePct = playback.subSize,
+        sizeEnabled = ownActive || nativeTextFallback,
+        onSize = { dir, fast ->
+            val step = if (fast) 20 else 10
+            vm.updatePlayback(playback.copy(subSize = (playback.subSize + dir * step).coerceIn(50, 250)))
+        },
+        onSizeReset = { vm.updatePlayback(playback.copy(subSize = 100)) },
         note = adjustNote
     )
 
@@ -878,7 +906,7 @@ fun PlayerScreen(vm: AppViewModel) {
             .background(Color.Black)
             .focusRequester(rootFocus)
             .onPreviewKeyEvent { ev ->
-                if (exitAsk || guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown) {
+                if (exitAsk || backAsk || guideOpen || trackMenuOpen || ev.type != KeyEventType.KeyDown) {
                     false
                 } else if (surfOpen) {
                     handleSurfKey(ev.key)
@@ -916,6 +944,7 @@ fun PlayerScreen(vm: AppViewModel) {
                 view.subtitleView?.let { sv ->
                     val pos = playback.subPos
                     sv.setBottomPaddingFraction(pos.coerceIn(0, 60) / 100f)
+                    sv.setFractionalTextSize(0.06f * playback.subSize.coerceIn(40, 250) / 100f)
                     // below 0% the text is pushed down past the picture's bottom edge (into the black bar)
                     sv.translationY = if (pos < 0) -pos / 100f * view.height else 0f
                     if (pos < 0) {
@@ -948,7 +977,7 @@ fun PlayerScreen(vm: AppViewModel) {
         }
 
         if (ownActive && !guideOpen && sl == null) {
-            SubtitleOverlay(cues, subDelayMs, playback.subPos, { exo.currentPosition })
+            SubtitleOverlay(cues, subDelayMs, playback.subPos, { exo.currentPosition }, sizePct = playback.subSize)
         }
 
         // touch: tap = show / hide controls, double tap = skip, swipe = change channel
@@ -1013,7 +1042,8 @@ fun PlayerScreen(vm: AppViewModel) {
                     guideOpen = false
                     vm.openSettings()
                 },
-                onClose = { guideOpen = false }
+                onClose = { guideOpen = false },
+                loadInfo = { vm.streamsFor(it) }
             )
         }
 
@@ -1060,6 +1090,18 @@ fun PlayerScreen(vm: AppViewModel) {
         val err = playError
         if (err != null) {
             Pill(err, Modifier.align(Alignment.TopCenter).padding(24.dp), Nova.danger)
+        }
+
+        if (backAsk && guideOpen) {
+            BackChoiceDialog(
+                channelLabel = ch?.let { "CH ${"%02d".format(it.number)} · ${it.name}" } ?: "Keep watching",
+                firstFocus = backAskFocus,
+                onReturn = {
+                    backAsk = false
+                    guideOpen = false
+                },
+                onExit = { (ctx as? android.app.Activity)?.finish() }
+            )
         }
 
         if (exitAsk) {

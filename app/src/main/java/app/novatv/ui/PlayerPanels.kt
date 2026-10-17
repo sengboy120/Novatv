@@ -90,6 +90,10 @@ class AdjustState(
     val delayEnabled: Boolean,
     val onDelay: (Int, Boolean) -> Unit,
     val onDelayReset: () -> Unit,
+    val sizePct: Int,
+    val sizeEnabled: Boolean,
+    val onSize: (Int, Boolean) -> Unit,
+    val onSizeReset: () -> Unit,
     val note: String
 )
 
@@ -167,6 +171,14 @@ fun TrackMenu(
                 enabled = adjust.delayEnabled,
                 onStep = adjust.onDelay,
                 onReset = adjust.onDelayReset
+            )
+            AdjustRow(
+                label = "Sub size",
+                value = "${adjust.sizePct}%",
+                hint = "◀ smaller  bigger ▶  OK reset",
+                enabled = adjust.sizeEnabled,
+                onStep = adjust.onSize,
+                onReset = adjust.onSizeReset
             )
             if (adjust.note.isNotEmpty()) {
                 Text(adjust.note, color = Nova.textDim, fontSize = 12.sp)
@@ -373,7 +385,8 @@ fun SubtitleOverlay(
     delayMs: Long,
     bottomPct: Int,
     getPos: () -> Long,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    sizePct: Int = 100
 ) {
     var line by remember { mutableStateOf("") }
     LaunchedEffect(cues, delayMs) {
@@ -397,7 +410,7 @@ fun SubtitleOverlay(
                     textAlign = TextAlign.Center,
                     style = TextStyle(
                         color = Color.White,
-                        fontSize = 26.sp,
+                        fontSize = (26f * sizePct.coerceIn(40, 250) / 100f).sp,
                         fontWeight = FontWeight.Medium,
                         shadow = Shadow(color = Color.Black, offset = Offset(0f, 0f), blurRadius = 12f)
                     ),
@@ -463,7 +476,7 @@ fun ControlBar(
                 Spacer(Modifier.height(14.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChannelBadge(ch.iconKey, size = if (narrow) 44.dp else 56.dp, chId = ch.id)
+                ChannelBadge(ch.iconKey, size = if (narrow) 52.dp else 66.dp, chId = ch.id)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -984,6 +997,100 @@ fun Slate(
                 Spacer(Modifier.height(6.dp))
                 Text(detail, color = Nova.text, fontSize = 15.sp, textAlign = TextAlign.Center)
             }
+        }
+    }
+}
+
+
+// ------------------------------------------------------------------------------------------------
+// Two-way choice shown when BACK is pressed in the guide (TV): back to the picture, or leave the app
+// ------------------------------------------------------------------------------------------------
+
+@Composable
+private fun ChoiceCard(
+    letter: String,
+    title: String,
+    sub: String,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null
+) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(16.dp)
+    val base = if (focusRequester != null) modifier.focusRequester(focusRequester) else modifier
+    Row(
+        base
+            .width(250.dp)
+            .shadow(if (focused) 18.dp else 0.dp, shape, ambientColor = accent, spotColor = accent)
+            .clip(shape)
+            .background(if (focused) accent.copy(alpha = 0.24f) else accent.copy(alpha = 0.08f))
+            .border(if (focused) 2.dp else 1.dp, if (focused) accent else accent.copy(alpha = 0.4f), shape)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(50))
+                .background(accent.copy(alpha = if (focused) 1f else 0.85f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(letter, color = Color(0xFF0B0B12), fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(title, color = if (focused) Color.White else accent, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, maxLines = 1)
+            Text(sub, color = Nova.textDim, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+fun BackChoiceDialog(
+    channelLabel: String,
+    firstFocus: FocusRequester,
+    onReturn: () -> Unit,
+    onExit: () -> Unit
+) {
+    val shape = RoundedCornerShape(22.dp)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xB3000000)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .clip(shape)
+                .background(Color(0xFF111119))
+                .border(1.5.dp, Brush.horizontalGradient(listOf(Nova.cyan, Color(0xFFFF4D6D))), shape)
+                .padding(horizontal = 26.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Leaving the guide", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                ChoiceCard(
+                    letter = "A",
+                    title = "BACK TO TV",
+                    sub = channelLabel,
+                    accent = Nova.cyan,
+                    onClick = onReturn,
+                    focusRequester = firstFocus
+                )
+                ChoiceCard(
+                    letter = "B",
+                    title = "EXIT APP",
+                    sub = "Close Bendit TV",
+                    accent = Color(0xFFFF4D6D),
+                    onClick = onExit
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("BACK again returns to TV", color = Nova.textDim, fontSize = 11.sp, letterSpacing = 1.sp)
         }
     }
 }

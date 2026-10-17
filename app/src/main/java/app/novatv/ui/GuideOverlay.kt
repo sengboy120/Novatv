@@ -70,8 +70,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.requiredWidth
 import app.novatv.Channel
+import app.novatv.MediaEntry
 import app.novatv.Program
+import app.novatv.StreamsInfo
+import app.novatv.net.Labels
 import app.novatv.Scheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -122,7 +126,9 @@ fun GuideOverlay(
     nowMs: Long,
     onTune: (Channel) -> Unit,
     onSettings: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** Looks up video / audio details of a programme for the info panel (null = not available). */
+    loadInfo: suspend (MediaEntry) -> StreamsInfo? = { null }
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -322,6 +328,8 @@ fun GuideOverlay(
                 Spacer(Modifier.width(14.dp))
                 Text("CHANNEL GUIDE", color = Nova.textDim, fontSize = 12.sp, letterSpacing = 4.sp)
                 Spacer(Modifier.weight(1f))
+                Text(fmtDateLong(nowMs), color = Nova.textDim, fontSize = 15.sp, fontWeight = FontWeight.Normal)
+                Spacer(Modifier.width(12.dp))
                 Text(fmtTime(nowMs), color = Nova.text, fontSize = 20.sp, fontWeight = FontWeight.Light)
                 Spacer(Modifier.width(18.dp))
                 Box(Modifier.onFocusChanged { if (it.hasFocus) zone = 2 }) {
@@ -351,7 +359,7 @@ fun GuideOverlay(
                     .fillMaxWidth()
                     .height(GuideMetrics.previewH)
             ) {
-                DetailPanel(detail, nowMs, accent, Modifier.weight(1f).fillMaxHeight())
+                DetailPanel(detail, nowMs, accent, loadInfo, Modifier.weight(1f).fillMaxHeight())
                 Spacer(Modifier.width(GuideMetrics.previewW + 16.dp))
             }
             Spacer(Modifier.height(8.dp))
@@ -399,18 +407,6 @@ fun GuideOverlay(
                     val x0 = (GuideMetrics.sideW + GuideMetrics.gutter).toPx()
                     val h = size.height
                     val dash = PathEffect.dashPathEffect(floatArrayOf(8f, 10f), 0f)
-                    // a dashed line on every half hour
-                    for (i in 0..(GuideMetrics.WINDOW_MIN / 30)) {
-                        val x = x0 + (i * 30 * GuideMetrics.DP_PER_MIN - scroll.value).dp.toPx()
-                        if (x < x0 || x > size.width) continue
-                        drawLine(
-                            color = if (i % 2 == 0) Color(0x40FFFFFF) else Color(0x24FFFFFF),
-                            start = Offset(x, 0f),
-                            end = Offset(x, h),
-                            strokeWidth = 1.5f,
-                            pathEffect = dash
-                        )
-                    }
                     // where the focused programme ends
                     val fe = focusEnd
                     if (fe != null) {
@@ -578,12 +574,12 @@ private fun ChannelCell(
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(12.dp)
-    val border: Brush = if (focused) acc.brush else SolidColor(acc.c1.copy(alpha = 0.28f))
+    val border: Brush = if (focused) acc.brush else SolidColor(Color(0x26FFFFFF))
     Row(
         modifier
             .shadow(if (focused) 14.dp else 0.dp, shape, ambientColor = acc.c1, spotColor = acc.c1)
             .clip(shape)
-            .background(tint(Nova.panel, acc.c1, if (focused) 0.34f else 0.16f))
+            .background(if (focused) tint(Nova.panel, acc.c1, 0.34f) else Nova.panel)
             .border(if (focused) 2.dp else 1.dp, border, shape)
             .onFocusChanged {
                 focused = it.isFocused
@@ -595,7 +591,10 @@ private fun ChannelCell(
     ) {
         Text(
             "%02d".format(ch.number),
-            style = TextStyle(brush = acc.brush, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold),
+            style = TextStyle(
+                brush = if (focused || isCurrent) acc.brush else SolidColor(Nova.textDim),
+                fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold
+            ),
             modifier = Modifier.width(30.dp)
         )
         ChannelBadge(ch.iconKey, size = 42.dp, chId = ch.id)
@@ -651,14 +650,14 @@ private fun ProgramBlock(
     val w = Math.max(p.spanMs / 60_000f * GuideMetrics.DP_PER_MIN, 56f)
     val border: Brush = when {
         focused -> acc.brush
-        isNow -> SolidColor(acc.c1.copy(alpha = 0.65f))
-        else -> SolidColor(acc.c1.copy(alpha = 0.2f))
+        isNow -> SolidColor(Color(0x47FFFFFF))
+        else -> SolidColor(Color(0x1AFFFFFF))
     }
     val base = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
     val bg = when {
         focused -> tint(Nova.panelHi, acc.c1, 0.38f)
-        isNow -> tint(Nova.panel, acc.c1, 0.27f)
-        else -> tint(Nova.panel, acc.c1, 0.11f)
+        isNow -> tint(Nova.panel, Color.White, 0.10f)
+        else -> Nova.panel
     }
 
     Box(
@@ -700,7 +699,7 @@ private fun ProgramBlock(
             val titleText = buildAnnotatedString {
                 append(en.displayTitle)
                 if (epTag.isNotEmpty()) {
-                    withStyle(SpanStyle(color = tint(Color.White, acc.c1, 0.65f), fontWeight = FontWeight.Bold, fontSize = 11.sp)) {
+                    withStyle(SpanStyle(color = if (focused) tint(Color.White, acc.c1, 0.65f) else Nova.textDim, fontWeight = FontWeight.Bold, fontSize = 11.sp)) {
                         append("  " + epTag)
                     }
                 }
@@ -717,7 +716,7 @@ private fun ProgramBlock(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     fmtTime(p.startMs) + "  ·  " + fmtDuration(p.durationMs),
-                    color = if (isNow) tint(Color.White, acc.c1, 0.55f) else Nova.textDim,
+                    color = if (isNow) Nova.text else Nova.textDim,
                     fontSize = 10.sp,
                     lineHeight = 13.sp,
                     maxLines = 1
@@ -727,6 +726,16 @@ private fun ProgramBlock(
                     Text("NOW", color = acc.c2, fontSize = 9.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 }
             }
+        }
+        if (isNow) {
+            // the only permanent colour on a block: a thin bar in the channel's colour marks what is on air
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(acc.c1)
+            )
         }
         if (isNow && p.durationMs > 0) {
             val frac = ((nowMs - p.startMs).toFloat() / p.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -746,7 +755,13 @@ private fun ProgramBlock(
 // ------------------------------------------------------------------------------------------------
 
 @Composable
-private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accent, modifier: Modifier) {
+private fun DetailPanel(
+    detail: Pair<Channel, Program>?,
+    nowMs: Long,
+    acc: Accent,
+    loadInfo: suspend (MediaEntry) -> StreamsInfo?,
+    modifier: Modifier
+) {
     Box(modifier) {
         DetailText(detail, nowMs, acc, Modifier.fillMaxSize())
         // the channel's logo sits in the top right corner of the panel
@@ -761,7 +776,87 @@ private fun DetailPanel(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accen
                     .padding(top = 10.dp, end = 12.dp)
             )
         }
+        // picture / sound badges under the logo (looked up from the server a moment after the selection settles)
+        val entry = detail?.second?.entry
+        if (entry != null && GuideMetrics.previewH >= 140.dp) {
+            var info by remember { mutableStateOf<StreamsInfo?>(null) }
+            LaunchedEffect(entry.id) {
+                info = null
+                delay(400L)
+                info = try {
+                    loadInfo(entry)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val badges = remember(info) { infoBadges(info) }
+            if (badges.isNotEmpty()) {
+                Column(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 72.dp, end = 12.dp),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    badges.forEach { b -> InfoBadge(b.first, b.second) }
+                }
+            }
+        }
     }
+}
+
+/** (text, colour) badges for the programme's resolution, HDR and main audio track. */
+private fun infoBadges(info: StreamsInfo?): List<Pair<String, Color>> {
+    if (info == null) return emptyList()
+    val out = ArrayList<Pair<String, Color>>()
+    val v = info.video
+    if (v != null) {
+        val r = Labels.resolution(v.width, v.height)
+        if (r.isNotEmpty()) out.add(Pair(r.uppercase(), Color(0xFF5CE1E6)))
+        if (v.hdr.isNotEmpty() && !v.hdr.equals("SDR", true)) {
+            out.add(Pair(if (v.hdr.startsWith("Dolby", true)) "DOLBY VISION" else v.hdr.uppercase(), Color(0xFFFFC857)))
+        }
+    }
+    val a = info.audio.firstOrNull { it.isDefault } ?: info.audio.firstOrNull()
+    if (a != null) {
+        val fmt = when (Labels.audioFormat(a.codec, a.profile, a.title, a.atmos)) {
+            "Dolby TrueHD Atmos", "Dolby Digital Plus Atmos" -> "Atmos"
+            "Dolby TrueHD" -> "TrueHD"
+            "Dolby Digital Plus" -> "DD+"
+            "Dolby Digital" -> "DD"
+            "" -> ""
+            else -> Labels.audioFormat(a.codec, a.profile, a.title, a.atmos)
+        }
+        val lay = when (val l = Labels.layout(a.channels, a.layout)) {
+            "2.0" -> "Stereo"
+            "1.0" -> "Mono"
+            else -> l
+        }
+        val text = listOf(fmt, lay).filter { it.isNotEmpty() }.joinToString(" ")
+        if (text.isNotEmpty()) out.add(Pair(text, Color(0xFFB388FF)))
+    }
+    return out
+}
+
+@Composable
+private fun InfoBadge(text: String, color: Color) {
+    val shape = RoundedCornerShape(5.dp)
+    Text(
+        text,
+        color = color,
+        fontSize = 10.sp,
+        lineHeight = 12.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.5.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(shape)
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.7f), shape)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
 }
 
 @Composable
@@ -772,12 +867,12 @@ private fun DetailText(detail: Pair<Channel, Program>?, nowMs: Long, acc: Accent
             .clip(shape)
             .background(tint(Color(0xE60C0C13), acc.c1, 0.09f))
             .border(1.dp, acc.c1.copy(alpha = 0.55f), shape)
-            .padding(start = 14.dp, end = if (detail != null) 82.dp else 14.dp, top = 8.dp, bottom = 8.dp),
+            .padding(start = 14.dp, end = if (detail != null) 96.dp else 14.dp, top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.Center
     ) {
         if (detail == null) {
             Text(
-                "Use ◀ ▶ ▲ ▼ to browse  ·  OK to tune in  ·  BACK to close",
+                "Use ◀ ▶ ▲ ▼ to browse  ·  OK to tune in  ·  BACK to leave",
                 color = Nova.textDim,
                 fontSize = 13.sp,
                 letterSpacing = 1.sp
