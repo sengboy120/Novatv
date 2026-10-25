@@ -113,7 +113,7 @@ data class ChannelSettings(
     val minItems: Int = 8
 )
 
-enum class Screen { PLAYER, SETTINGS, ADD_SERVER }
+enum class Screen { PLAYER, SETTINGS, ADD_SERVER, REORDER }
 
 // ---- playback / tracks -------------------------------------------------------------------------
 

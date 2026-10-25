@@ -194,6 +194,16 @@ fun SettingsScreen(vm: AppViewModel) {
             NeonButton("+", onClick = { vm.updateSettings(settings.copy(minItems = (settings.minItems + 2).coerceAtMost(60))) })
         }
 
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            NeonButton("REORDER CHANNELS", onClick = { vm.openReorder() }, accent = Nova.magenta)
+            Text(
+                "Put the channels in your own order, e.g. ABC as channel 1.",
+                color = Nova.textDim,
+                fontSize = 13.sp,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
         SectionLabel("CHANNEL LOGOS")
         Row(verticalAlignment = Alignment.CenterVertically) {
             NeonButton(

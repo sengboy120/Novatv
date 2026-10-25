@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,6 +55,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -359,6 +362,12 @@ fun GuideOverlay(
                     .fillMaxWidth()
                     .height(GuideMetrics.previewH)
             ) {
+                PosterPanel(
+                    detail?.second?.entry?.thumbUrl ?: "",
+                    accent,
+                    Modifier.fillMaxHeight().aspectRatio(2f / 3f)
+                )
+                Spacer(Modifier.width(10.dp))
                 DetailPanel(detail, nowMs, accent, loadInfo, Modifier.weight(1f).fillMaxHeight())
                 Spacer(Modifier.width(GuideMetrics.previewW + 16.dp))
             }
@@ -727,32 +736,34 @@ private fun ProgramBlock(
                 }
             }
         }
-        if (isNow) {
-            // the only permanent colour on a block: a thin bar in the channel's colour marks what is on air
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .width(3.dp)
-                    .background(acc.c1)
-            )
-        }
-        if (isNow && p.durationMs > 0) {
-            val frac = ((nowMs - p.startMs).toFloat() / p.durationMs.toFloat()).coerceIn(0f, 1f)
-            Box(
-                Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth(frac * (p.durationMs.toFloat() / p.spanMs.toFloat()))
-                    .height(3.dp)
-                    .background(acc.brush)
-            )
-        }
     }
 }
 
 // ------------------------------------------------------------------------------------------------
 // Detail panel
 // ------------------------------------------------------------------------------------------------
+
+/** The film's / show's poster, drawn to the left of the synopsis. */
+@Composable
+private fun PosterPanel(url: String, acc: Accent, modifier: Modifier) {
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        modifier
+            .clip(shape)
+            .background(tint(Color(0xE60C0C13), acc.c1, 0.09f))
+            .border(1.dp, acc.c1.copy(alpha = 0.55f), shape),
+        contentAlignment = Alignment.Center
+    ) {
+        if (url.isNotEmpty()) {
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
 
 @Composable
 private fun DetailPanel(

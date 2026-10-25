@@ -102,14 +102,36 @@ object RealChannels {
 
     private fun clean(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
 
+    /**
+     * Independent labels that have no channel of their own. When one of them is listed among a film's studios the film
+     * stays off the studio channels, even if a big studio (Paramount, Universal ...) is listed as co-producer /
+     * distributor next to it (an A24 film distributed by Paramount must not end up on CBS).
+     */
+    private val independents = listOf(
+        "a24", "neon", "annapurna", "magnolia", "ifc", "mubi", "roadsideattractions", "bleeckerstreet",
+        "stx", "oscilloscope", "kinolorber"
+    )
+
+    /** Does the studio / network name [raw] belong to alias [a]? Short aliases must be the first word ("Foxtail" is not FOX). */
+    private fun hit(raw: String, a: String): Boolean {
+        val full = clean(raw)
+        if (full == a) return true
+        val first = clean(raw.trim().split(Regex("[^A-Za-z0-9]+")).firstOrNull() ?: "")
+        if (first == a) return true
+        return a.length >= 5 && full.startsWith(a)
+    }
+
     /** The channel a programme belongs to, or null when it isn't on any of them. */
     fun match(e: MediaEntry): RealChannel? {
         if (e.network.isEmpty()) return null
-        val names = e.network.split('|').map { clean(it) }.filter { it.isNotEmpty() }
-        // the first studio / network listed decides (a Sony film co-produced by Marvel stays on Sony)
+        val names = e.network.split('|').map { it.trim() }.filter { clean(it).isNotEmpty() }
+        // an independent label anywhere in the studio list keeps the film off the studio channels
+        // (A24 + Paramount stays on none), otherwise the first studio that is a known channel decides
+        // (a Sony film co-produced by Marvel stays on Sony)
+        if (names.any { n -> independents.any { hit(n, it) } }) return null
         for (n in names) {
             for (ch in all) {
-                if (ch.aliases.any { a -> n == a || (a.length >= 3 && n.startsWith(a)) }) return ch
+                if (ch.aliases.any { a -> hit(n, a) }) return ch
             }
         }
         return null
@@ -163,7 +185,7 @@ object ChannelBuilder {
             .map { Spec("$prefix-${it.key}", "${Genres.label(it.key)} $suffix", kind, it.key, it.value) }
     }
 
-    fun build(all: List<MediaEntry>, s: ChannelSettings): List<Channel> {
+    fun build(all: List<MediaEntry>, s: ChannelSettings, order: List<String> = emptyList()): List<Channel> {
         val usable = all.filter { it.durationMs >= 60_000L }
         val movies = usable.filter { it.kind == EntryKind.MOVIE }
         val eps = usable.filter { it.kind == EntryKind.EPISODE }
@@ -200,7 +222,16 @@ object ChannelBuilder {
         val keep = trimmed.take(room).map { it.id }.toHashSet()
         specs.addAll(genres.filter { it.id in keep })
 
-        return specs.take(99).mapIndexed { i, sp ->
+        // the viewer's own order (Settings > Reorder channels); channels not in the saved list follow in the default order
+        val ranked: List<Spec> = if (order.isEmpty()) {
+            specs
+        } else {
+            val pos = HashMap<String, Int>()
+            order.forEachIndexed { i, id -> if (!pos.containsKey(id)) pos[id] = i }
+            specs.sortedBy { pos[it.id] ?: Int.MAX_VALUE }
+        }
+
+        return ranked.take(99).mapIndexed { i, sp ->
             Channel(
                 id = sp.id,
                 number = i + 1,

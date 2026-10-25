@@ -68,6 +68,18 @@ object Langs {
     }
 }
 
+/** What this device's video decoders can't do (learned when a decoder fails to start). */
+object VideoCaps {
+    /** True once the hardware HEVC decoder failed on this device (some car head units): ask the server for H.264 instead. */
+    @Volatile
+    var hevcBroken: Boolean = false
+
+    fun isHevc(codec: String?): Boolean {
+        val c = (codec ?: "").lowercase()
+        return c == "hevc" || c == "h265" || c == "hev1" || c == "hvc1"
+    }
+}
+
 object Streams {
 
     fun fetchInfo(s: Server, e: MediaEntry, clientId: String): StreamsInfo =
@@ -205,7 +217,8 @@ object Streams {
         clientId: String,
         forceDirect: Boolean,
         audioKey: String?,
-        subKey: String?
+        subKey: String?,
+        h264Only: Boolean = false
     ): PlayRequest {
         if (forceDirect || p.mode == PlayMode.DIRECT) {
             // Text subtitles are fetched and drawn by the app itself (so position / delay can be adjusted);
@@ -220,6 +233,8 @@ object Streams {
             else -> subKey
         }
         val always = p.mode == PlayMode.TRANSCODE
+        // this device can't decode HEVC (or it just failed on this title): the server must hand us H.264
+        val h264 = always || h264Only || VideoCaps.hevcBroken
         // text subtitles are drawn by the app (not burned in) when the server can hand us the subtitle file
         val softSub = sKey != null && (info?.subs?.firstOrNull { it.key == sKey }?.let {
             it.isText && it.sidecarUrl.isNotEmpty()
@@ -229,7 +244,7 @@ object Streams {
             val sb = StringBuilder("${s.baseUrl}/video/:/transcode/universal/start.m3u8?")
             sb.append("path=").append(Http.enc("/library/metadata/${e.itemId}"))
             sb.append("&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=0")
-            sb.append("&directStream=").append(if (always) "0" else "1")
+            sb.append("&directStream=").append(if (always || h264Only || VideoCaps.hevcBroken) "0" else "1")
             sb.append("&maxVideoBitrate=").append(p.maxMbps * 1000)
             if (always) sb.append("&videoResolution=1920x1080&videoQuality=100")
             sb.append("&subtitleSize=100&audioBoost=100&copyts=1")
@@ -248,7 +263,7 @@ object Streams {
             sb.append("MediaSourceId=").append(Http.enc(src))
             sb.append("&DeviceId=").append(Http.enc(clientId))
             sb.append("&PlaySessionId=").append(UUID.randomUUID())
-            sb.append("&VideoCodec=").append(if (always) "h264" else "h264,hevc")
+            sb.append("&VideoCodec=").append(if (h264) "h264" else "h264,hevc")
             sb.append("&AudioCodec=").append(if (always) "aac" else "aac,ac3,eac3")
             sb.append("&MaxStreamingBitrate=").append(p.maxMbps * 1_000_000L)
             sb.append("&TranscodingMaxAudioChannels=").append(if (always) 2 else 6)

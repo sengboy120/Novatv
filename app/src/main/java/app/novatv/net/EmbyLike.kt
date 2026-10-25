@@ -121,7 +121,7 @@ object EmbyLike {
                     genres = info?.first ?: emptyList(),
                     year = o.optInt("ProductionYear", 0),
                     durationMs = o.optLong("RunTimeTicks", 0L) / 10_000L,
-                    thumbUrl = "${s.baseUrl}/Items/$id/Images/Primary?maxHeight=360&api_key=$key",
+                    thumbUrl = "${s.baseUrl}/Items/${o.optString("SeriesId", "").ifEmpty { id }}/Images/Primary?maxHeight=360&api_key=$key",
                     streamUrl = "${s.baseUrl}/Videos/$id/stream?static=true&api_key=$key",
                     overview = o.optString("Overview", "").take(420),
                     rating = o.optDouble("CommunityRating", 0.0).toFloat(),

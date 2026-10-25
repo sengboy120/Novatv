@@ -216,7 +216,8 @@ object PlexApi {
                         val season = e.optInt("parentIndex", 0)
                         val ep = e.optInt("index", 0)
                         val code = if (season > 0 || ep > 0) String.format("S%02dE%02d", season, ep) else ""
-                        val thumb = e.optString("thumb", "").ifEmpty { e.optString("grandparentThumb", "") }
+                        // the show's poster (portrait) is what the guide draws; fall back to the episode still
+                        val thumb = e.optString("grandparentThumb", "").ifEmpty { e.optString("thumb", "") }
                         out.add(
                             MediaEntry(
                                 id = "${s.id}:${e.optString("ratingKey")}",

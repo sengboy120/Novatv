@@ -34,6 +34,7 @@ import androidx.compose.ui.res.painterResource
 import app.novatv.ui.AddServerScreen
 import app.novatv.ui.Nova
 import app.novatv.ui.PlayerScreen
+import app.novatv.ui.ReorderScreen
 import app.novatv.ui.SettingsScreen
 import kotlinx.coroutines.delay
 
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity() {
                             Screen.PLAYER -> PlayerScreen(vm)
                             Screen.SETTINGS -> SettingsScreen(vm)
                             Screen.ADD_SERVER -> AddServerScreen(vm)
+                            Screen.REORDER -> ReorderScreen(vm)
                         }
                     }
                     // start-up logo, drawn over the app while it loads (any key skips it)

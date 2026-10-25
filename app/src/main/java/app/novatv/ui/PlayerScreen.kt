@@ -178,6 +178,7 @@ fun PlayerScreen(vm: AppViewModel) {
     var subDelayMs by remember { mutableLongStateOf(0L) }
     val forceDirect = remember { HashSet<String>() }
     val forceTranscode = remember { HashSet<String>() }
+    val forceH264 = remember { HashSet<String>() }
     val retried = remember { HashSet<String>() }
 
     /** Slate for the time between the end of a film and the next slot on a "real" channel. */
@@ -262,7 +263,21 @@ fun PlayerScreen(vm: AppViewModel) {
                 val id = playingId
                 val why = errorText(error)
                 val c = vm.currentChannel()
-                if (!retried.contains(id)) {
+                val msg = ((error.message ?: "") + " " + (error.cause?.message ?: "")).lowercase()
+                val decoderFail = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+                    error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+                val videoDecoderFail = decoderFail && (msg.contains("video/") || msg.contains("hevc") || msg.contains("avc") || msg.contains("vp9") || msg.contains("av1"))
+                if (videoDecoderFail && !forceH264.contains(id)) {
+                    // 0) this device's video decoder can't play the file (e.g. HEVC on a car head unit): ask the server for H.264
+                    forceH264.add(id)
+                    forceTranscode.add(id)
+                    forceDirect.remove(id)
+                    if (!isTv && msg.contains("hevc")) vm.markHevcBroken()
+                    playError = "Video decoder can't play this file - asking the server for H.264"
+                    vm.retune()
+                } else if (!retried.contains(id)) {
                     // 1) one plain retry (network hiccups, the surface being resized ...)
                     retried.add(id)
                     playError = "Playback hiccup ($why) - retrying"
@@ -353,7 +368,7 @@ fun PlayerScreen(vm: AppViewModel) {
         }
 
         val prep: Prepared = try {
-            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id))
+            vm.prepare(p.entry, startAt, forceDirect.contains(p.entry.id), audioKey, subKey, forceTranscode.contains(p.entry.id), forceH264.contains(p.entry.id))
         } catch (ex: CancellationException) {
             throw ex
         } catch (ex: Exception) {

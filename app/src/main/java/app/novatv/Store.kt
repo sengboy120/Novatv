@@ -1,6 +1,7 @@
 package app.novatv
 
 import android.content.Context
+import app.novatv.net.VideoCaps
 import app.novatv.ui.Device
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,6 +15,25 @@ class Store(context: Context) {
 
     private val prefs = context.getSharedPreferences("novatv", Context.MODE_PRIVATE)
     private val cacheFile = File(context.filesDir, "library.json")
+
+    init {
+        VideoCaps.hevcBroken = prefs.getBoolean("hevcBroken", false)
+    }
+
+    /** The viewer's own channel order (channel ids, first = channel 1). Empty = default order. */
+    var channelOrder: List<String>
+        get() = (prefs.getString("channelOrder", "") ?: "").split(',').filter { it.isNotEmpty() }
+        set(value) {
+            prefs.edit().putString("channelOrder", value.joinToString(",")).apply()
+        }
+
+    /** Remembered across restarts: the hardware HEVC decoder of this device failed once. */
+    var hevcBroken: Boolean
+        get() = prefs.getBoolean("hevcBroken", false)
+        set(value) {
+            prefs.edit().putBoolean("hevcBroken", value).apply()
+            VideoCaps.hevcBroken = value
+        }
 
     // ---- servers -----------------------------------------------------------------------------
 

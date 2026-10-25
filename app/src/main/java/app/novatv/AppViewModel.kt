@@ -7,6 +7,7 @@ import app.novatv.net.EmbyLike
 import app.novatv.net.PlexApi
 import app.novatv.net.PlexAuth
 import app.novatv.net.Streams
+import app.novatv.net.VideoCaps
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,6 +83,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val infoCache = HashMap<String, StreamsInfo>()
 
+    @Volatile
+    private var channelOrder: List<String> = store.channelOrder
+
     private val _entries = MutableStateFlow<List<MediaEntry>>(emptyList())
 
     private val _channels = MutableStateFlow<List<Channel>>(emptyList())
@@ -140,7 +144,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun rebuild(retune: Boolean) {
-        val chs = ChannelBuilder.build(_entries.value, _settings.value)
+        val chs = ChannelBuilder.build(_entries.value, _settings.value, channelOrder)
         _channels.value = chs
         val cur = _currentChannelId.value
         if (chs.isNotEmpty() && (cur == null || chs.none { it.id == cur })) {
@@ -185,6 +189,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _screen.value = Screen.SETTINGS
     }
 
+    fun openReorder() {
+        _screen.value = Screen.REORDER
+    }
+
+    /** The viewer put the channels in a new order (ids, first = channel 1). */
+    fun saveChannelOrder(ids: List<String>) {
+        channelOrder = ids
+        store.channelOrder = ids
+        viewModelScope.launch(Dispatchers.Default) { rebuild(retune = false) }
+    }
+
+    /** Back to the automatic order. */
+    fun resetChannelOrder() {
+        channelOrder = emptyList()
+        store.channelOrder = emptyList()
+        viewModelScope.launch(Dispatchers.Default) { rebuild(retune = false) }
+    }
+
+    /** Channel ids in the automatic (default) order. */
+    fun defaultOrder(): List<String> = ChannelBuilder.build(_entries.value, _settings.value).map { it.id }
+
     fun openAddServer() {
         _addError.value = null
         _screen.value = Screen.ADD_SERVER
@@ -197,6 +222,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _screen.value = Screen.SETTINGS
             }
             Screen.SETTINGS -> _screen.value = Screen.PLAYER
+            Screen.REORDER -> _screen.value = Screen.SETTINGS
             Screen.PLAYER -> Unit
         }
     }
@@ -287,6 +313,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (next != cur) updatePlayback(next)
     }
 
+    /** The hardware HEVC decoder failed on this (non-TV) device: from now on the server converts HEVC to H.264. */
+    fun markHevcBroken() {
+        store.hevcBroken = true
+    }
+
     /** Video / audio details of [e] for the guide's info panel (cached; null if the server can't be reached). */
     suspend fun streamsFor(e: MediaEntry): StreamsInfo? = withContext(Dispatchers.IO) {
         val hit = synchronized(infoCache) { infoCache[e.id] }
@@ -318,7 +349,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         forceDirect: Boolean,
         audioKey: String?,
         subKey: String?,
-        forceTranscode: Boolean = false
+        forceTranscode: Boolean = false,
+        h264Only: Boolean = false
     ): Prepared = withContext(Dispatchers.IO) {
         val saved = _playback.value
         // direct play failed for this title: let the server convert whatever the Shield couldn't handle
@@ -342,6 +374,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // the device's HEVC decoder is known to fail: never direct-play an HEVC file, let the server convert it
+        if (p.mode == PlayMode.DIRECT && !forceDirect && VideoCaps.hevcBroken && VideoCaps.isHevc(info?.video?.codec)) {
+            p = p.copy(mode = PlayMode.SMART)
+        }
         // "DTS-HD: CONVERT": let the server turn DTS-HD audio into Dolby Digital instead of sending it to the receiver
         val inf = info
         if (inf != null && p.mode == PlayMode.DIRECT && !forceDirect && saved.dtsMode == DtsMode.CONVERT) {
@@ -350,7 +386,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ?: inf.audio.firstOrNull { it.isDefault } ?: inf.audio.firstOrNull()
             if (a != null && Streams.isDtsHd(a)) p = p.copy(mode = PlayMode.SMART)
         }
-        Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey), info)
+        Prepared(Streams.build(server, e, info, p, offsetMs, store.clientId, forceDirect, audioKey, subKey, h264Only), info)
     }
 
     // ---- servers -------------------------------------------------------------------------------
